@@ -1,0 +1,13 @@
+{% comment %}
+  A project page's idea list (#384), with the empty "Add idea" slot first. Saving a
+  new idea re-renders this whole list (views._render_project_ideas), so the idea lands
+  at its sorted place and a fresh slot comes back.
+{% endcomment %}
+<ul class="ideas project-ideas" id="project-ideas-{{ project.pk }}">
+  <li class="idea-new-slot" id="new-idea-{{ project.pk }}" hidden></li>
+  {% for idea in ideas %}
+    {% include "core/_idea.html" %}
+  {% empty %}
+    <li class="ideas-empty empty">No {% if not show_closed %}open {% endif %}ideas.</li>
+  {% endfor %}
+</ul>

@@ -1,0 +1,17 @@
+[project]
+name = "claude_manager"
+version = "0.1.0"
+description = "A self-hosted idea board that Claude Code agents read and update over MCP"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "django>=6.1,<6.2",
+    "markdown>=3.7",
+    "nh3>=0.3.7",
+    "uvicorn>=0.30",
+    "whitenoise>=6.9",
+]
+
+[tool.uv]
+# Uncomment and run `uv lock` to pin all versions:
+# lock = true

@@ -1,0 +1,34 @@
+{% comment %}
+  A project page's header (#384): name, status menu, git chip, open-idea counts, the
+  Edit / Admin links and the description. It is the swap target for the project's
+  status menu and inline Edit form, as _project.html is on a list, so it carries the
+  same #project-<pk> id and data-sig for the background poll.
+{% endcomment %}
+<section class="project project-detail project-status-{{ project.status }}" id="project-{{ project.pk }}"
+         data-name="{{ project.name }}" data-folder="{{ project.folder }}" data-sig="{{ project.head_signature }}">
+  {% url 'core:project_transition' project.pk as project_transition_url %}
+  <div class="project-head">
+    <h1>{{ project.name }}</h1>
+    {% if not project.is_implemented %}
+    {% include "core/_status_menu.html" with action=project_transition_url target_prefix="project" target_pk=project.pk transitions=project.allowed_transitions status=project.status status_label=project.get_status_display %}
+    {% endif %}
+    {% if project.git_status_needs_attention %}
+    <span class="git-status git-status-{{ project.git_status }}"
+          title="{% if project.git_detail %}{{ project.git_detail }} · {% endif %}checked {{ project.git_checked_at }}">{{ project.get_git_status_display }}</span>
+    {% endif %}
+    {% with counts=project.open_idea_counts %}
+    {% if counts %}
+    <span class="project-open-counts">{% for label, n in counts %}{{ n }} {{ label }}{% if not forloop.last %} · {% endif %}{% endfor %}</span>
+    {% endif %}
+    {% endwith %}
+  </div>
+  <div class="project-actions">
+    <a href="{% url 'core:project_edit' project.pk %}{{ qs }}"
+       hx-get="{% url 'core:project_edit' project.pk %}{{ qs }}"
+       hx-target="#project-{{ project.pk }}" hx-swap="outerHTML" class="admin-link">Edit</a>
+    <a class="admin-link" href="{% url 'admin:core_project_change' project.pk %}">Admin</a>
+  </div>
+  {% if project.description %}
+  <p class="description">{{ project.description|linebreaksbr }}</p>
+  {% endif %}
+</section>

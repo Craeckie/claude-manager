@@ -1,0 +1,114 @@
+{% extends "base.html" %}
+
+{% block content %}
+<h1>Projects</h1>
+
+{% comment %}
+  A real GET form, so filtering works with JavaScript off. With JavaScript, the
+  script below hides non-matching rows as the box changes -- no request per keystroke.
+{% endcomment %}
+<form class="project-filter" method="get" action="{% url 'core:projects' %}" role="search">
+  <input type="search" name="q" value="{{ q }}" placeholder="Filter projects…"
+         autocomplete="off" aria-label="Filter projects">
+  {% if show_closed %}<input type="hidden" name="closed" value="1">{% endif %}
+  <button type="submit">Filter</button>
+  <a class="filter-clear" href="{% url 'core:projects' %}{% if show_closed %}?closed=1{% endif %}">Clear</a>
+</form>
+
+<p class="page-actions">
+  {% if show_closed %}
+  <a class="closed-toggle" href="{% url 'core:projects' %}{% if q %}?q={{ q|urlencode }}{% endif %}">Hide closed</a>
+  {% else %}
+  <a class="closed-toggle" href="{% url 'core:projects' %}?closed=1{% if q %}&amp;q={{ q|urlencode }}{% endif %}">Show closed</a>
+  {% endif %}
+</p>
+
+<div id="project-list" {% include "core/_board_attrs.html" %}>
+  {% if not any_projects %}
+  <p class="empty">No projects yet. <a href="/admin/core/project/add/">Add one in the admin.</a></p>
+  {% else %}
+  <p class="empty no-match-message"{% if any_match %} hidden{% endif %}>No projects match “<span class="no-match-query">{{ q }}</span>”.</p>
+  {% endif %}
+  {% for group in groups %}
+  <section class="project-group"{% if not group.matches %} hidden{% endif %}>
+    <h2 class="project-group-heading">{{ group.label }} <span class="project-group-count">{{ group.projects|length }}</span></h2>
+    <ul class="project-rows">
+      {% for project in group.projects %}
+        {% include "core/_project_row.html" %}
+      {% endfor %}
+    </ul>
+  </section>
+  {% endfor %}
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+{% load static %}
+<script src="{% static 'js/board.js' %}" defer></script>
+<script>
+// Client-side filter: rows are only ever hidden, never removed, so nothing is
+// lost while typing. A group with no visible row is hidden with it.
+(function () {
+  var input = document.querySelector('.project-filter input[name=q]');
+  if (!input) {
+    return;
+  }
+  function applyFilter() {
+    var raw = input.value.trim();
+    var q = raw.toLowerCase();
+    var anyVisible = false;
+    document.querySelectorAll('#project-list .project-group').forEach(function (group) {
+      var rows = group.querySelectorAll('.project-row');
+      var shown = 0;
+      rows.forEach(function (row) {
+        var matches = !q || (row.dataset.name || '').toLowerCase().indexOf(q) !== -1
+          || (row.dataset.folder || '').toLowerCase().indexOf(q) !== -1;
+        row.hidden = !matches;
+        if (matches) {
+          shown += 1;
+        }
+      });
+      group.hidden = shown === 0;
+      group.querySelector('.project-group-count').textContent = q ? shown + ' of ' + rows.length : rows.length;
+      anyVisible = anyVisible || shown > 0;
+    });
+    var noMatch = document.querySelector('.no-match-message');
+    if (noMatch) {
+      noMatch.hidden = anyVisible;
+      noMatch.querySelector('.no-match-query').textContent = raw;
+    }
+    // Links that reload the page keep the query.
+    document.querySelectorAll('.closed-toggle').forEach(function (link) {
+      var url = new URL(link.getAttribute('href'), window.location.href);
+      if (raw) {
+        url.searchParams.set('q', raw);
+      } else {
+        url.searchParams.delete('q');
+      }
+      link.setAttribute('href', url.pathname + url.search);
+    });
+    var params = new URLSearchParams(window.location.search);
+    if (raw) {
+      params.set('q', raw);
+    } else {
+      params.delete('q');
+    }
+    var query = params.toString();
+    history.replaceState(null, '', window.location.pathname + (query ? '?' + query : ''));
+  }
+  input.addEventListener('input', applyFilter);
+  document.addEventListener('click', function (event) {
+    if (event.target.closest('.filter-clear')) {
+      event.preventDefault();
+      input.value = '';
+      applyFilter();
+      input.focus();
+    }
+  });
+  applyFilter();
+  // A row swapped in (status menu, background update) does not know the query.
+  document.body.addEventListener('htmx:afterSwap', applyFilter);
+  document.addEventListener('cm:board-updated', applyFilter);
+})();
+</script>
+{% endblock %}

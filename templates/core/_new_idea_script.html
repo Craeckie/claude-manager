@@ -1,0 +1,44 @@
+{% comment %}Add idea / Cancel on a page that includes _new_idea_template.html.{% endcomment %}
+<script>
+// Add idea / Cancel: both clone or restore markup already on the page, so
+// neither ever makes a request.
+(function () {
+  document.addEventListener('click', function (event) {
+    var cancel = event.target.closest('.idea-new-cancel');
+    if (cancel) {
+      event.preventDefault();
+      var pk = cancel.dataset.projectPk;
+      var slot = document.getElementById('new-idea-' + pk);
+      if (slot) {
+        var empty = document.createElement('li');
+        empty.className = 'idea-new-slot';
+        empty.id = 'new-idea-' + pk;
+        empty.hidden = true;
+        slot.replaceWith(empty);
+      }
+      return;
+    }
+
+    var addLink = event.target.closest('.add-idea-link');
+    if (addLink) {
+      event.preventDefault();
+      var pk = addLink.dataset.projectPk;
+      var slot = document.getElementById('new-idea-' + pk);
+      var template = document.getElementById('new-idea-form');
+      if (!slot || !template) {
+        return;
+      }
+      var wrapper = document.createElement('div');
+      wrapper.innerHTML = template.innerHTML.split('__PK__').join(pk);
+      var formLi = wrapper.firstElementChild;
+      slot.replaceWith(formLi);
+      htmx.process(formLi);
+      var titleInput = formLi.querySelector('[autofocus]');
+      if (titleInput) {
+        titleInput.focus();
+      }
+      formLi.scrollIntoView({ block: 'nearest' });
+    }
+  });
+})();
+</script>

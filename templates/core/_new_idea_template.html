@@ -1,0 +1,29 @@
+{% comment %}
+  Blank IdeaCreateForm, cloned client-side by _new_idea_script.html whenever
+  "Add idea" is clicked. __PK__ marks every spot that needs the real project
+  id; new_idea_form_action is the idea_new URL reversed once with a
+  placeholder pk (see core/views.py), so the route lives in one place
+  (core/urls.py) rather than being retyped here. A save re-renders
+  the project page's whole idea list.
+{% endcomment %}
+<template id="new-idea-form">
+  <li class="idea idea-editing" id="new-idea-__PK__">
+    <form class="edit-form" method="post"
+          action="{{ new_idea_form_action }}"
+          hx-post="{{ new_idea_form_action }}"
+          hx-target="#project-ideas-__PK__" hx-swap="outerHTML">
+      {% csrf_token %}
+      {% for field in new_idea_form %}
+      <div class="form-field">
+        <label for="{{ field.id_for_label }}">{{ field.label }}</label>
+        {{ field }}
+      </div>
+      {% endfor %}
+      <div class="idea-actions">
+        <button type="submit" class="transition-btn">Add idea</button>
+        <a href="{{ request.get_full_path }}"
+           class="admin-link idea-new-cancel" data-project-pk="__PK__">Cancel</a>
+      </div>
+    </form>
+  </li>
+</template>

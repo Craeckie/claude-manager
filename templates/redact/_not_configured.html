@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block title %}Redact logs{% endblock %}
+{% block content %}
+<h1>Redact logs</h1>
+<div class="redact-panel redact-panel-error">
+  <p><strong>Not configured.</strong> This screen refuses uploads until both of its
+  directories are set and writable, rather than half-scrubbing a log into somewhere
+  unexpected.</p>
+  {% if reason %}<p class="redact-reason"><code>{{ reason }}</code></p>{% endif %}
+  <ul>
+    <li><code>LOG_ANALYSIS_ROOT</code> &mdash; the directory holding one folder per case,
+        where redacted output is written. In Docker this needs a bind mount.</li>
+    <li><code>REDACT_STATE_DIR</code> &mdash; per-case salt and names. It must be a
+        <strong>writable volume</strong>: the default sits inside the image, which is the
+        wrong place in a container and read-only in a hardened one.</li>
+  </ul>
+  <p>Set both, then restart the server. See the README.</p>
+</div>
+{% endblock %}

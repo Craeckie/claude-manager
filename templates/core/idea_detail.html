@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+
+{% block content %}
+<nav class="breadcrumb" aria-label="Breadcrumb">
+  <a href="{% url 'core:project_detail' project.folder %}">{{ project.name }}</a>
+  <span aria-hidden="true">›</span>
+  <span aria-current="page">#{{ idea.pk }}</span>
+</nav>
+
+{% comment %}
+  The idea's own page (#384): the same card partial as every list, rendered with
+  view="idea" -- expanded, not lazy, and kept on the page whatever its status, so a
+  transition to implemented or a move to another project re-renders it in place.
+{% endcomment %}
+<ul class="ideas idea-detail" {% include "core/_board_attrs.html" %}>
+  {% include "core/_idea.html" %}
+</ul>
+
+<section class="detail-activity">
+  <h2>Activity</h2>
+  {% include "core/_activity_list.html" %}
+</section>
+{% endblock %}
+
+{% block extra_scripts %}
+{% load static %}
+<script src="{% static 'js/board.js' %}" defer></script>
+{% include "core/_copy_script.html" %}
+{% endblock %}

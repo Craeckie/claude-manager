@@ -1,0 +1,208 @@
+{% extends "base.html" %}
+
+{% block title %}Redact logs{% endblock %}
+
+{% block content %}
+<h1>Redact logs</h1>
+
+{% if not_configured %}
+<div class="redact-panel redact-panel-error">
+  <p><strong>Not configured.</strong> <code>LOG_ANALYSIS_ROOT</code> is unset or does not
+  point at an existing directory, so this screen refuses to accept uploads.</p>
+  <p>Set the <code>LOG_ANALYSIS_ROOT</code> environment variable to the directory
+  that holds your cases and restart the server.</p>
+</div>
+{% else %}
+
+<p class="description">
+  Drop log files here to scrub them (IPs, keys, emails, logins — see
+  <code>redact/log_redact.py</code>) and write the redacted text straight into a
+  case's <code>logs/</code> directory under <code>LOG_ANALYSIS_ROOT</code>. Nothing is downloaded;
+  the redacted file is written on the server that runs this screen.
+</p>
+
+{% if error %}
+<div class="redact-panel redact-panel-error">{{ error }}</div>
+{% endif %}
+
+<form method="get" class="redact-case-picker" id="redact-case-load">
+  <label for="redact-case-select">Case</label>
+  {% comment %}
+    Upload clients may scrape this select for the case list (the block from
+    id="redact-case-select" to </select>, then every <option value="...">), so
+    keep the id, keep value as each option's first attribute in double quotes,
+    and keep the blank option's value empty.
+  {% endcomment %}
+  <select name="case" id="redact-case-select" onchange="this.form.submit()">
+    <option value="">— choose a project or case —</option>
+    {% if project_cases %}
+    <optgroup label="Projects">
+      {% for c in project_cases %}
+      <option value="{{ c.name }}"{% if c.name == selected_case %} selected{% endif %}>{{ c.name }}{% if c.count %} ({{ c.count }} log{{ c.count|pluralize }}, last {{ c.last|date:"Y-m-d" }}){% endif %}</option>
+      {% endfor %}
+    </optgroup>
+    {% endif %}
+    {% if other_cases %}
+    <optgroup label="Other cases">
+      {% for c in other_cases %}
+      <option value="{{ c.name }}"{% if c.name == selected_case %} selected{% endif %}>{{ c.name }}{% if c.count %} ({{ c.count }} log{{ c.count|pluralize }}, last {{ c.last|date:"Y-m-d" }}){% endif %}</option>
+      {% endfor %}
+    </optgroup>
+    {% endif %}
+  </select>
+  <noscript><button type="submit">Load</button></noscript>
+</form>
+
+{% if selected_logs %}
+<section class="redact-case-logs" id="redact-case-logs">
+  <h2>Already in <code>{{ selected_case }}</code> <span class="redact-optional">(newest first, times UTC)</span></h2>
+  <ol>
+    {% for log in selected_logs %}
+    <li><time datetime="{{ log.time|date:"c" }}">{{ log.time|date:"Y-m-d H:i:s" }}</time>
+        <code>{{ log.name }}</code></li>
+    {% endfor %}
+  </ol>
+</section>
+{% endif %}
+
+<form method="post" action="{% url 'redact:paste' %}" class="redact-form" id="redact-form" enctype="application/x-www-form-urlencoded">
+  {% csrf_token %}
+  <div class="redact-field">
+    <label for="redact-case">Case <span class="redact-optional">(optional)</span></label>
+    <input type="text" name="case" id="redact-case" value="{{ selected_case }}"
+           placeholder="a project like my-app, or any name"
+           title="A project, any other name, or nothing at all">
+    <p class="redact-hint">A project's name (any capitals) files the log under its
+       folder, <code>my-app</code> &rarr; <code>my-app/logs/</code>, with one salt
+       for all of that project's logs so they correlate. Any other name starts a case
+       of that name. Left blank you get <code>YYYY-MM-DD-HHMM</code>. Every file is
+       saved as <code>YYYY-MM-DD-HHMMSS-&lt;file&gt;.log</code> (server clock, UTC), so
+       you can tell which log is new.</p>
+  </div>
+
+  <div class="redact-field">
+    <label for="redact-hosts">Names to redact (one per line)</label>
+    <textarea name="hosts" id="redact-hosts" rows="4"
+              placeholder="hostnames, usernames, search-domain fragments — anything literal that should be scrubbed">{{ hosts_text }}</textarea>
+  </div>
+
+  <div class="redact-field" id="redact-dropzone" tabindex="0"
+       data-upload-url="{% url 'redact:upload' %}" data-csrf="{{ csrf_token }}">
+    <p><strong>Drop log files here</strong>, or use the picker below (JavaScript only —
+       falls back to the paste box otherwise).</p>
+    <input type="file" id="redact-file-input" multiple>
+  </div>
+
+  <noscript>
+  <div class="redact-field">
+    <label for="redact-filename">Filename (for the destination log)</label>
+    <input type="text" name="filename" id="redact-filename" value="pasted.log">
+  </div>
+  <div class="redact-field">
+    <label for="redact-content">Paste log text</label>
+    <textarea name="content" id="redact-content" rows="16"></textarea>
+  </div>
+  <button type="submit">Redact and save</button>
+  </noscript>
+</form>
+
+<ul class="redact-results" id="redact-results">
+{% if result %}
+{% include "redact/_result.html" %}
+{% endif %}
+</ul>
+
+<script>
+(function () {
+  var dropzone = document.getElementById("redact-dropzone");
+  var fileInput = document.getElementById("redact-file-input");
+  var results = document.getElementById("redact-results");
+  var caseInput = document.getElementById("redact-case");
+  var hostsInput = document.getElementById("redact-hosts");
+  if (!dropzone) return;
+
+  function uploadOne(file) {
+    var params = new URLSearchParams({
+      case: caseInput.value.trim(),
+      hosts: hostsInput.value.trim(),
+    });
+    var url = dropzone.dataset.uploadUrl + "?" + params.toString();
+    return fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/octet-stream",
+        "X-Filename": file.name,
+        "X-CSRFToken": dropzone.dataset.csrf,
+      },
+      body: file,
+    })
+      .then(function (resp) {
+        return resp.text().then(function (html) {
+          if (!resp.ok) {
+            // A 400 carries {"error": ...} (a reserved case name, an archive);
+            // shown as text, since it can echo what was typed into the field.
+            var message = String(resp.status);
+            try { message = JSON.parse(html).error || message; } catch (e) {}
+            var li = document.createElement("li");
+            li.className = "redact-result redact-result-error";
+            var strong = document.createElement("strong");
+            strong.textContent = "Failed (" + file.name + "):";
+            li.appendChild(strong);
+            li.appendChild(document.createTextNode(" " + message));
+            results.insertBefore(li, results.firstChild);
+            return;
+          }
+          results.insertAdjacentHTML("afterbegin", html);
+          // Adopt the case the SERVER resolved, so the rest of this batch lands in
+          // the same folder under the same salt. Without this each file would mint
+          // its own timestamp and a drop straddling a minute tick would split across
+          // two cases with two salts -- tokens that no longer correlate, which is
+          // the exact failure this whole feature exists to prevent. Reading it back
+          // from the response rather than computing it here also keeps the browser's
+          // clock and date out of it.
+          var first = results.firstElementChild;
+          if (first && first.dataset.case) caseInput.value = first.dataset.case;
+        });
+      })
+      .catch(function (err) {
+        results.insertAdjacentHTML(
+          "afterbegin",
+          '<li class="redact-result redact-result-error"><strong>Failed (' +
+            file.name + "):</strong> " + err + "</li>"
+        );
+      });
+  }
+
+  function handleFiles(files) {
+    // Sequential, not Array.forEach: the first response is what fixes the case name
+    // for every file after it. Firing them in parallel would race that.
+    Array.prototype.reduce.call(
+      files,
+      function (chain, file) {
+        return chain.then(function () { return uploadOne(file); });
+      },
+      Promise.resolve()
+    );
+  }
+
+  dropzone.addEventListener("dragover", function (e) {
+    e.preventDefault();
+    dropzone.classList.add("redact-dropzone-active");
+  });
+  dropzone.addEventListener("dragleave", function () {
+    dropzone.classList.remove("redact-dropzone-active");
+  });
+  dropzone.addEventListener("drop", function (e) {
+    e.preventDefault();
+    dropzone.classList.remove("redact-dropzone-active");
+    if (e.dataTransfer && e.dataTransfer.files) handleFiles(e.dataTransfer.files);
+  });
+  fileInput.addEventListener("change", function () {
+    handleFiles(fileInput.files);
+    fileInput.value = "";
+  });
+})();
+</script>
+
+{% endif %}
+{% endblock %}

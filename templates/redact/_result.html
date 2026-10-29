@@ -1,0 +1,46 @@
+{% if error %}
+<li class="redact-result redact-result-error">
+  <strong>Failed:</strong> {{ error }}
+</li>
+{% else %}
+<li class="redact-result{% if result.leak_hits %} redact-result-leaky{% endif %}" data-case="{{ result.case }}">
+  <p class="redact-result-file">Saved as <code>{{ result.filename }}</code> in
+     <strong>{{ result.case }}</strong>: {{ result.line_count }}
+     line{{ result.line_count|pluralize }} scrubbed.</p>
+  <p class="redact-result-path"><code>{{ result.path }}</code></p>
+  {% if result.format %}
+  <p class="redact-format">Detected <strong>{{ result.format }}</strong>:
+     {{ result.dropped }} line{{ result.dropped|pluralize }} dropped before scrubbing
+     (not from the anchored process).</p>
+  {% endif %}
+  {% if result.warning %}
+  <p class="redact-warning"><strong>Warning:</strong> {{ result.warning }}</p>
+  {% endif %}
+  {% if result.stats %}
+  <details class="redact-tally">
+    <summary>Redaction tally ({{ result.stats.values|length }} kind{{ result.stats.values|length|pluralize }})</summary>
+    <ul>
+      {% for kind, n in result.stats.items %}
+      <li>{{ kind }}: {{ n }}</li>
+      {% endfor %}
+    </ul>
+  </details>
+  {% endif %}
+  {% if result.leak_hits %}
+  <p class="redact-leak-warning">
+    <strong>Leak check found possible unredacted material:</strong>
+    {% for kind, n in result.leak_hits.items %}{{ kind }}: {{ n }}{% if not forloop.last %}, {% endif %}{% endfor %}.
+    Review the file before sharing it.
+  </p>
+  {% else %}
+  <p class="redact-leak-ok">Leak check: clean.</p>
+  {% endif %}
+  {% if result.preview %}
+  <details class="redact-preview" open>
+    <summary>Preview (first {{ result.preview|length }} line{{ result.preview|length|pluralize }})</summary>
+    <pre>{% for line in result.preview %}{{ line }}
+{% endfor %}</pre>
+  </details>
+  {% endif %}
+</li>
+{% endif %}

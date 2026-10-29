@@ -1,0 +1,26 @@
+{% comment %}The Copy buttons on idea cards: shared by every page that lists cards.{% endcomment %}
+<script>
+document.addEventListener('click', function (event) {
+  var btn = event.target.closest('.copy-btn');
+  if (btn && navigator.clipboard) {
+    // The header #id button carries its text in its dataset (idea #287 removed the
+    // "<Project>: <Title>" Copy button); every other Copy button reads the raw
+    // prompt from its own .idea-content-block.
+    var text;
+    if (btn.dataset.copyText !== undefined) {
+      text = btn.dataset.copyText;
+    } else {
+      var block = btn.closest('.idea-content-block');
+      text = block.querySelector('.idea-content').textContent;
+    }
+    navigator.clipboard.writeText(text).then(function () {
+      var originalText = btn.textContent;
+      btn.textContent = 'Copied!';
+      setTimeout(function () {
+        btn.textContent = originalText;
+      }, 1200);
+    });
+    return;
+  }
+});
+</script>

@@ -1,0 +1,38 @@
+{% comment %}
+  The feed itself (#361), shared by the full page and its own refresh. Its context
+  comes from views.activity_feed (days, refresh_url, project_url_prefix,
+  display_time_zone), so a project or idea page can include it with a filtered list.
+  Refreshes itself every 30 s while the tab is visible.
+{% endcomment %}
+{% load tz %}
+{% timezone display_time_zone %}
+<div id="activity-list" hx-get="{{ refresh_url }}"
+     hx-trigger="every 30s [document.visibilityState === 'visible']" hx-swap="outerHTML">
+  {% if filter_unknown %}
+    <p class="activity-empty">Nothing matches that filter.</p>
+  {% endif %}
+  {% for day in days %}
+    <h2 class="activity-day">{{ day.label }}</h2>
+    <ul class="activity">
+      {% for group in day.groups %}
+        <li class="activity-entry {% if group.is_agent %}activity-agent{% else %}activity-user{% endif %}">
+          <time datetime="{{ group.end|date:'c' }}"
+                title="{{ group.start|date:'Y-m-d H:i' }}{% if group.events|length > 1 %} – {{ group.end|date:'H:i' }}{% endif %}">{{ group.end|date:"H:i" }}</time>
+          <span class="activity-source">{{ group.source_label }}</span>
+          <span class="activity-subject">
+            {% if group.idea_id %}
+              {% if group.url %}<a class="activity-idea" href="{{ group.url }}">#{{ group.idea_id }} {{ group.title }}</a>{% else %}<span class="activity-idea activity-gone">#{{ group.idea_id }} {{ group.title }}</span>{% endif %}
+              {% if group.project_id %}<a class="activity-project" href="{{ project_url_prefix }}{{ group.project_id }}">{{ group.project_name }}</a>{% endif %}
+            {% else %}
+              <a class="activity-idea" href="{{ project_url_prefix }}{{ group.project_id }}">Project {{ group.title }}</a>
+            {% endif %}
+          </span>
+          <span class="activity-summary">{{ group.summary|join:" · " }}</span>
+        </li>
+      {% endfor %}
+    </ul>
+  {% empty %}
+    {% if not filter_unknown %}<p class="activity-empty">Nothing changed in the last two weeks.</p>{% endif %}
+  {% endfor %}
+</div>
+{% endtimezone %}

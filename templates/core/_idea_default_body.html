@@ -1,0 +1,32 @@
+{% comment %}
+The plan/report/prompt content shared by an idea with no special leading section --
+today's default layout. Included by a new or closed card's <div class="idea-body">, and
+by _idea_main.html for a planned idea with no plan yet, so the markup itself never
+differs by caller.
+{% endcomment %}
+{% if idea.plan_html %}
+<details class="idea-plan">
+  <summary>Plan</summary>
+  {% comment %}
+    One checkbox, not a pair of radios: unchecked shows the rendered panel and the
+    label reads "Raw" (the view it switches to); checked shows the raw panel and the
+    label reads "Rendered". :checked ~ sibling rules in style.css swap both the
+    panels and which label span is visible, so the toggle works with JavaScript off
+    and costs no round trip. The id is per-idea so two expanded cards do not share
+    one control.
+  {% endcomment %}
+  <div class="idea-plan-view">
+    <input type="checkbox" id="view-raw-plan-{{ idea.pk }}" class="view-raw-toggle">
+    <label class="view-toggle" for="view-raw-plan-{{ idea.pk }}">
+      <span class="view-toggle-raw">Raw</span>
+      <span class="view-toggle-rendered">Rendered</span>
+    </label>
+    <div class="idea-plan-body">{{ idea.plan_html }}</div>
+    <pre class="idea-plan-raw">{{ idea.plan }}</pre>
+  </div>
+</details>
+{% endif %}
+{% include "core/_idea_artifacts.html" with idea=idea %}
+{% include "core/_idea_review_details.html" with idea=idea %}
+{% include "core/_idea_report_details.html" with idea=idea %}
+{% include "core/_idea_prompt.html" with labelled=True %}

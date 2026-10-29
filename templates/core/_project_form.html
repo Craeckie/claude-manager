@@ -1,0 +1,23 @@
+<section class="project project-editing" id="project-{{ project.pk }}" data-sig="{{ project.head_signature }}">
+  <form class="edit-form" method="post"
+        action="{% url 'core:project_edit' project.pk %}{{ qs }}"
+        hx-post="{% url 'core:project_edit' project.pk %}{{ qs }}"
+        hx-target="#project-{{ project.pk }}" hx-swap="outerHTML">
+    {% csrf_token %}
+    {% for field in form %}
+    <div class="form-field">
+      <label for="{{ field.id_for_label }}">{{ field.label }}</label>
+      {{ field }}
+      {% if field.errors %}
+      <div class="form-errors">{{ field.errors }}</div>
+      {% endif %}
+    </div>
+    {% endfor %}
+    <div class="idea-actions">
+      <button type="submit" class="transition-btn">Save</button>
+      <a href="{{ back_url }}"
+         hx-get="{% url 'core:project_card' project.pk %}{{ qs }}"
+         hx-target="#project-{{ project.pk }}" hx-swap="outerHTML" class="admin-link">Cancel</a>
+    </div>
+  </form>
+</section>

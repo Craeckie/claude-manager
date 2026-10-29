@@ -1,0 +1,22 @@
+{% comment %}
+Review findings from a code review of this idea's implementation, for the idea's next
+agent to address. Shown whenever idea.review is non-empty, regardless of status: a
+review lands on a verify or even implemented idea before it gets reopened, and stays
+visible if the reopen transition has not happened yet. Same single-checkbox
+Rendered/Raw toggle as the plan block, not the rendered-only report pattern, since
+review findings are input to be acted on, not a record of what already happened.
+{% endcomment %}
+{% if idea.review_html %}
+<details class="idea-review" open>
+  <summary>Review findings</summary>
+  <div class="idea-review-view">
+    <input type="checkbox" id="view-raw-review-{{ idea.pk }}" class="view-raw-toggle">
+    <label class="view-toggle" for="view-raw-review-{{ idea.pk }}">
+      <span class="view-toggle-raw">Raw</span>
+      <span class="view-toggle-rendered">Rendered</span>
+    </label>
+    <div class="idea-review-body">{{ idea.review_html }}</div>
+    <pre class="idea-review-raw">{{ idea.review }}</pre>
+  </div>
+</details>
+{% endif %}

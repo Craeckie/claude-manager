@@ -1,0 +1,27 @@
+<li class="idea idea-editing" id="new-idea-{{ project.pk }}">
+  <form class="edit-form" method="post"
+        action="{% url 'core:idea_new' project.pk %}{{ qs }}"
+        hx-post="{% url 'core:idea_new' project.pk %}{{ qs }}"
+        hx-target="#project-ideas-{{ project.pk }}" hx-swap="outerHTML">
+    {% csrf_token %}
+    {% for field in form %}
+    <div class="form-field">
+      <label for="{{ field.id_for_label }}">{{ field.label }}</label>
+      {{ field }}
+      {% if field.errors %}
+      <div class="form-errors">{{ field.errors }}</div>
+      {% endif %}
+    </div>
+    {% endfor %}
+    <div class="idea-actions">
+      <button type="submit" class="transition-btn">Add idea</button>
+      {% comment %}
+        No hx-get: _new_idea_script.html resets the slot to its empty <li>
+        in place, so cancelling never round-trips. The href stays for JS-off,
+        where it falls back to a plain navigation home.
+      {% endcomment %}
+      <a href="{{ back_url }}"
+         class="admin-link idea-new-cancel" data-project-pk="{{ project.pk }}">Cancel</a>
+    </div>
+  </form>
+</li>

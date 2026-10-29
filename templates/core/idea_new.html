@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+
+{% block title %}New idea in {{ project.name }}{% endblock %}
+
+{% block content %}
+<h1>New idea in {{ project.name }}</h1>
+<ul class="ideas">
+{% include "core/_idea_new_form.html" %}
+</ul>
+{% endblock %}

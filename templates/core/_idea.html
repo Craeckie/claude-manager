@@ -1,0 +1,53 @@
+{% url 'core:idea_transition' idea.pk as idea_transition_url %}
+{% comment %}
+  Every card collapses to its header row. A new or closed idea has nothing
+  actionable to lead with, so it starts collapsed; a planned or verify idea leads
+  with its plan or report -- the reason it is in that status -- so its toggle is
+  rendered checked and it starts expanded (idea #287). On the idea's own page every
+  card starts expanded (#384). A 1px, transparent,
+  keyboard-reachable checkbox drives it (the same house pattern as
+  .view-raw-toggle / .plan-more-toggle), not <details>/<summary>: the status
+  menu, the #id copy button and the Edit/Admin links all have to stay ordinary,
+  independently clickable siblings, and nesting them inside a <summary> would fight
+  the browser's own click-to-toggle behavior on every one of them.
+{% endcomment %}
+<li class="idea{% if idea.is_closed %} idea-closed{% endif %} idea-collapsible" id="idea-{{ idea.pk }}" data-version="{{ idea.card_version }}"
+    {% if view == "ideas" %}data-filter="{{ idea.title }} {{ idea.project.name }} {{ idea.project.folder }}"{% endif %}
+    {% if idea.matches is False %}hidden{% endif %}>
+  <input type="checkbox" id="idea-expand-{{ idea.pk }}" class="idea-expand-toggle"{% if view == "idea" or idea.status == "planned" or idea.status == "verify" %} checked{% endif %}>
+  {% include "core/_status_menu.html" with action=idea_transition_url target_prefix="idea" target_pk=idea.pk transitions=idea.allowed_transitions status=idea.status status_label=idea.get_status_display %}
+  <label class="idea-expand-label" for="idea-expand-{{ idea.pk }}">
+    <span class="idea-expand-marker" aria-hidden="true"></span>
+    <button class="copy-btn idea-number" type="button" data-copy-text="#{{ idea.pk }}">#{{ idea.pk }}</button>
+    <strong>{{ idea.title }}</strong>
+    <span class="visually-hidden">(click to expand)</span>
+  </label>
+  {% if view == "ideas" %}
+  <a class="idea-project" href="{% url 'core:project_detail' idea.project.folder %}">{{ idea.project.name }}</a>
+  {% endif %}
+  {% if idea.kind != "other" %}
+  <span class="idea-kind idea-kind-{{ idea.kind }}">{{ idea.get_kind_display }}</span>
+  {% endif %}
+  {% if idea.needs_verification %}{% if idea.status == "new" or idea.status == "planned" %}
+  <span class="idea-verify-chip" title="Finishing this idea moves it to Verify, not straight to Implemented">needs verification</span>
+  {% endif %}{% endif %}
+  <div class="idea-actions">
+    <a href="{% url 'core:idea_edit' idea.pk %}{{ qs }}"
+       hx-get="{% url 'core:idea_edit' idea.pk %}{{ qs }}"
+       hx-target="#idea-{{ idea.pk }}" hx-swap="outerHTML" class="admin-link">Edit</a>
+    {% if view != "idea" %}
+    <a class="admin-link idea-open-link" href="{% url 'core:idea_detail' idea.pk %}">Open</a>
+    {% endif %}
+    <a class="admin-link" href="{% url 'admin:core_idea_change' idea.pk %}">Admin</a>
+  </div>
+  <div class="idea-body">
+    {% if lazy %}
+    {% url 'core:idea_body' idea.pk as idea_lazy_url %}
+    {% include "core/_idea_lazy.html" %}
+    {% elif idea.status == "planned" or idea.status == "verify" %}
+    {% include "core/_idea_main.html" %}
+    {% else %}
+    {% include "core/_idea_default_body.html" with idea=idea %}
+    {% endif %}
+  </div>
+</li>

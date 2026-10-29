@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+
+{% block content %}
+<nav class="breadcrumb" aria-label="Breadcrumb">
+  <a href="{% url 'core:projects' %}">Projects</a>
+  <span aria-hidden="true">›</span>
+  <span aria-current="page">{{ project.name }}</span>
+</nav>
+
+<div class="board" {% include "core/_board_attrs.html" %}>
+{% include "core/_project_head.html" %}
+
+<div class="project-ideas-head">
+  <h2>Ideas</h2>
+  {% comment %}
+    No hx-get: opening the form clones the blank <template> below client-side
+    (_new_idea_template.html), so this never round-trips. The href stays so the
+    link still works with JavaScript off.
+  {% endcomment %}
+  <a href="{% url 'core:idea_new' project.pk %}{{ qs }}"
+     class="admin-link add-idea-link" data-project-pk="{{ project.pk }}">Add idea</a>
+  {% if show_closed %}
+  <a class="closed-toggle" href="{% url 'core:project_detail' project.folder %}">Hide closed</a>
+  {% else %}
+  <a class="closed-toggle" href="{% url 'core:project_detail' project.folder %}?closed=1">Show closed</a>
+  {% endif %}
+</div>
+
+{% include "core/_project_ideas.html" %}
+</div>
+
+<section class="detail-activity">
+  <h2>Activity</h2>
+  {% include "core/_activity_list.html" %}
+</section>
+
+{% include "core/_new_idea_template.html" %}
+{% endblock %}
+
+{% block extra_scripts %}
+{% load static %}
+<script src="{% static 'js/board.js' %}" defer></script>
+{% include "core/_copy_script.html" %}
+{% include "core/_new_idea_script.html" %}
+{% endblock %}

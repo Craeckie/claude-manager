@@ -1,0 +1,7 @@
+Swagger UI 5.17.14
+Vendored (no CDN), matching the project rule that also applies to htmx.
+
+  https://cdnjs.cloudflare.com/ajax/libs/swagger-ui/5.17.14/swagger-ui.css
+  https://cdnjs.cloudflare.com/ajax/libs/swagger-ui/5.17.14/swagger-ui-bundle.js
+
+To upgrade: re-download both files at the new version and update this note.

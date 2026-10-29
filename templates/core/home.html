@@ -1,0 +1,127 @@
+{% extends "base.html" %}
+
+{% block content %}
+<h1>Ideas</h1>
+
+{% comment %}
+  A real GET form, so filtering works with JavaScript off. With JavaScript, the
+  script below hides non-matching cards as the box changes -- no request per
+  keystroke, and an open edit form under a hidden card survives the filter.
+{% endcomment %}
+<form class="project-filter" method="get" action="{% url 'core:home' %}" role="search">
+  <input type="search" name="q" value="{{ q }}" placeholder="Filter by title or project…"
+         autocomplete="off" aria-label="Filter ideas">
+  {% if show_closed %}<input type="hidden" name="closed" value="1">{% endif %}
+  <button type="submit">Filter</button>
+  <a class="filter-clear" href="{% url 'core:home' %}{{ qs }}">Clear</a>
+</form>
+
+<p class="page-actions">
+  {% if show_closed %}
+  <a class="closed-toggle" href="{% url 'core:home' %}{% if q %}?q={{ q|urlencode }}{% endif %}">Hide closed</a>
+  {% else %}
+  <a class="closed-toggle" href="{% url 'core:home' %}?closed=1{% if q %}&amp;q={{ q|urlencode }}{% endif %}">Show closed</a>
+  {% endif %}
+</p>
+
+{% comment %}The data-* values drive the background poll, static/js/board.js (#322).{% endcomment %}
+<div id="idea-board" {% include "core/_board_attrs.html" %}>
+  {% if not any_ideas %}
+  <p class="empty">No {% if not show_closed %}open {% endif %}ideas. Add one on a <a href="{% url 'core:projects' %}">project's page</a>.</p>
+  {% else %}
+  <p class="empty no-match-message"{% if any_match %} hidden{% endif %}>No ideas match “<span class="no-match-query">{{ q }}</span>”.</p>
+  {% endif %}
+  {% comment %}
+    Every section is rendered, empty or not, so a card that arrives later (the
+    background poll) has a list to go into; CSS hides a section with no card.
+  {% endcomment %}
+  {% for section in sections %}
+  <section class="idea-section idea-section-{{ section.status }}" data-status="{{ section.status }}"{% if section.ideas and not section.matches %} hidden{% endif %}>
+    <h2 class="idea-section-heading">{{ section.label }} <span class="idea-section-count">{{ section.ideas|length }}</span></h2>
+    <ul class="ideas" id="ideas-{{ section.status }}">
+      {% for idea in section.ideas %}
+        {% include "core/_idea.html" %}
+      {% endfor %}
+    </ul>
+  </section>
+  {% endfor %}
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+{% load static %}
+<script src="{% static 'js/board.js' %}" defer></script>
+{% include "core/_copy_script.html" %}
+<script>
+// Client-side filter over title, project name and folder (each card's
+// data-filter). Cards are only hidden, never removed; a section with no visible
+// card is hidden with it, and each heading counts what it shows.
+(function () {
+  var input = document.querySelector('.project-filter input[name=q]');
+  if (!input) {
+    return;
+  }
+  function applyFilter() {
+    var raw = input.value.trim();
+    var q = raw.toLowerCase();
+    var anyVisible = false;
+    document.querySelectorAll('#idea-board .idea-section').forEach(function (section) {
+      var shown = 0;
+      var cards = section.querySelectorAll('li.idea[id^="idea-"]');
+      cards.forEach(function (card) {
+        // An open edit form has no data-filter; keep it visible rather than hide
+        // what the user is typing into.
+        var text = card.dataset.filter;
+        var matches = !q || text === undefined || text.toLowerCase().indexOf(q) !== -1;
+        card.hidden = !matches;
+        if (matches) {
+          shown += 1;
+        }
+      });
+      section.hidden = cards.length > 0 && shown === 0;
+      section.querySelector('.idea-section-count').textContent = q ? shown + ' of ' + cards.length : cards.length;
+      anyVisible = anyVisible || shown > 0;
+    });
+    var noMatch = document.querySelector('.no-match-message');
+    if (noMatch) {
+      noMatch.hidden = anyVisible || !document.querySelector('#idea-board li.idea');
+      noMatch.querySelector('.no-match-query').textContent = raw;
+    }
+    // Links that reload the page keep the query.
+    document.querySelectorAll('.closed-toggle').forEach(function (link) {
+      var url = new URL(link.getAttribute('href'), window.location.href);
+      if (raw) {
+        url.searchParams.set('q', raw);
+      } else {
+        url.searchParams.delete('q');
+      }
+      link.setAttribute('href', url.pathname + url.search);
+    });
+    var params = new URLSearchParams(window.location.search);
+    if (raw) {
+      params.set('q', raw);
+    } else {
+      params.delete('q');
+    }
+    var query = params.toString();
+    history.replaceState(null, '', window.location.pathname + (query ? '?' + query : ''));
+  }
+  input.addEventListener('input', applyFilter);
+  // A JS-off ?q= load renders the right cards hidden; this also counts "n of m".
+  applyFilter();
+  document.addEventListener('click', function (event) {
+    if (event.target.closest('.filter-clear')) {
+      event.preventDefault();
+      input.value = '';
+      applyFilter();
+      input.focus();
+    }
+  });
+  // A card swapped in (transition, edit, upload) does not know the query, and a
+  // closed one leaves its section: re-apply, which also re-counts the headings.
+  // The background poll fires the same event after it changed the board.
+  document.body.addEventListener('htmx:afterSwap', applyFilter);
+  document.addEventListener('cm:board-updated', applyFilter);
+})();
+</script>
+{% endblock %}

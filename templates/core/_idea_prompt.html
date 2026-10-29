@@ -1,0 +1,26 @@
+{% comment %}
+The generated prompt, rendered and raw. `labelled` adds the "Prompt" heading for the
+default layout; inside a <details class="idea-prompt"> the <summary> already says it,
+and this block is what idea_prompt serves into that <details> on first open.
+{% endcomment %}
+<div class="idea-content-block">
+  {% comment %}
+    One checkbox per idea drives which of the two panels is visible, the same
+    single-checkbox toggle as the plan block. The copy handler (_copy_script.html) reads
+    .idea-content's textContent, which works on a CSS-hidden element, so Copy always
+    yields the raw prompt whichever panel is showing.
+  {% endcomment %}
+  <input type="checkbox" id="view-raw-prompt-{{ idea.pk }}" class="view-raw-toggle">
+  <div class="idea-content-head">
+    {% if labelled %}<span class="idea-content-label">Prompt</span>{% endif %}
+    <div class="idea-content-head-controls">
+      <label class="view-toggle" for="view-raw-prompt-{{ idea.pk }}">
+        <span class="view-toggle-raw">Raw</span>
+        <span class="view-toggle-rendered">Rendered</span>
+      </label>
+      <button class="copy-btn" type="button">Copy</button>
+    </div>
+  </div>
+  <div class="idea-prompt-body">{{ idea.prompt_html }}</div>
+  <pre class="idea-content">{{ idea.build_prompt }}</pre>
+</div>

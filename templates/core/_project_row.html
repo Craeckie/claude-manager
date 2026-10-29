@@ -1,0 +1,23 @@
+{% comment %}
+  One row of the Projects view (#384): the name linking to the project's page, its
+  status menu, git chip and open-idea counts. The swap target for the row's status
+  menu, so it carries #project-<pk>, and data-sig for the background poll.
+{% endcomment %}
+<li class="project-row project-status-{{ project.status }}" id="project-{{ project.pk }}"
+    data-name="{{ project.name }}" data-folder="{{ project.folder }}" data-sig="{{ project.head_signature }}"
+    {% if project.matches is False %}hidden{% endif %}>
+  {% url 'core:project_transition' project.pk as project_transition_url %}
+  <a class="project-row-name" href="{% url 'core:project_detail' project.folder %}">{{ project.name }}</a>
+  {% if not project.is_implemented %}
+  {% include "core/_status_menu.html" with action=project_transition_url target_prefix="project" target_pk=project.pk transitions=project.allowed_transitions status=project.status status_label=project.get_status_display %}
+  {% endif %}
+  {% if project.git_status_needs_attention %}
+  <span class="git-status git-status-{{ project.git_status }}"
+        title="{% if project.git_detail %}{{ project.git_detail }} · {% endif %}checked {{ project.git_checked_at }}">{{ project.get_git_status_display }}</span>
+  {% endif %}
+  {% with counts=project.open_idea_counts %}
+  {% if counts %}
+  <span class="project-open-counts">{% for label, n in counts %}{{ n }} {{ label }}{% if not forloop.last %} · {% endif %}{% endfor %}</span>
+  {% endif %}
+  {% endwith %}
+</li>

@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+
+{% block title %}Edit {{ idea.title }}{% endblock %}
+
+{% block content %}
+<ul class="ideas">
+{% include "core/_idea_form.html" %}
+</ul>
+{% endblock %}

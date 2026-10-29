@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+.git/
+.gitignore
+db.sqlite3
+media/
+static_collected/
+claude_manager/production.py
+*.local.md
+.env

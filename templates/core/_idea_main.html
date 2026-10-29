@@ -1,0 +1,108 @@
+{% comment %}
+Everything below the header row of a planned or verify card (expanded by default): split
+out of _idea.html so idea_body can serve it on its own into the lazy stand-in.
+{% endcomment %}
+  {% if idea.status == "verify" %}
+  {% comment %}
+    Claude Code no longer closes an idea itself: it leaves a report and screenshots
+    here and moves the idea to "verify" for the user to check. So a verify idea leads
+    with the report, not the plan or the prompt -- it is why the idea is in this
+    status -- shown open and rendered-only, exactly like a planned idea's plan block.
+    Plan and prompt both move behind closed <details> below, since they are no longer
+    the primary thing on the card.
+  {% endcomment %}
+  {% if idea.report_html %}
+  <div class="idea-report-block">
+    <div class="idea-report-heading">Report</div>
+    {% if idea.report_is_long %}
+    {% comment %}
+      Same :checked ~ sibling trick as the plan block's clamp: a 1px, transparent
+      checkbox drives which label (and which max-height) is visible, so "Show more" /
+      "Show less" costs no JavaScript and no round trip.
+    {% endcomment %}
+    <div class="idea-report-clamped">
+      <input type="checkbox" id="report-more-{{ idea.pk }}" name="report-more-{{ idea.pk }}"
+             class="report-more-toggle">
+      <div class="idea-report-body">{{ idea.report_html }}</div>
+      <label class="report-more-label report-more-show" for="report-more-{{ idea.pk }}">Show more</label>
+      <label class="report-more-label report-more-hide" for="report-more-{{ idea.pk }}">Show less</label>
+    </div>
+    {% else %}
+    <div class="idea-report-body">{{ idea.report_html }}</div>
+    {% endif %}
+  </div>
+  {% endif %}
+  {% include "core/_idea_screenshots.html" with idea=idea %}
+  {% include "core/_idea_artifacts.html" with idea=idea %}
+  {% if idea.plan_html %}
+  <details class="idea-plan">
+    <summary>Plan</summary>
+    <div class="idea-plan-view">
+      <input type="checkbox" id="view-raw-plan-{{ idea.pk }}" class="view-raw-toggle">
+      <label class="view-toggle" for="view-raw-plan-{{ idea.pk }}">
+        <span class="view-toggle-raw">Raw</span>
+        <span class="view-toggle-rendered">Rendered</span>
+      </label>
+      <div class="idea-plan-body">{{ idea.plan_html }}</div>
+      <pre class="idea-plan-raw">{{ idea.plan }}</pre>
+    </div>
+  </details>
+  {% endif %}
+  {% include "core/_idea_review_details.html" with idea=idea %}
+  <details class="idea-prompt">
+    <summary>Prompt</summary>
+    {% comment %}
+      Fetched the first time the <details> is opened: htmx's `intersect` cannot fire
+      on content a closed <details> does not render (see _idea_lazy.html).
+    {% endcomment %}
+    {% url 'core:idea_prompt' idea.pk as idea_lazy_url %}
+    {% include "core/_idea_lazy.html" %}
+  </details>
+  {% elif idea.status == "planned" and idea.plan_html %}
+  {% comment %}
+    A planned idea with a plan leads with the plan, not the prompt: the plan is why the
+    idea is in this status, so it is shown open; the prompt moves behind a closed
+    <details> instead, since it is now the secondary thing on the card. The plan here is
+    rendered-only, by design -- it gets no Rendered/Raw toggle, unlike the prompt below.
+    A report can still be here too (an idea reopened from verify keeps what was written
+    about it), so it gets its own closed <details>, same as the non-planned branch below.
+  {% endcomment %}
+  <div class="idea-plan-block">
+    <div class="idea-plan-heading">Plan</div>
+    {% if idea.plan_is_long %}
+    {% comment %}
+      Same :checked ~ sibling trick as the view toggle below: a 1px, transparent
+      checkbox drives which label (and which max-height) is visible, so "Show more" /
+      "Show less" costs no JavaScript and no round trip.
+    {% endcomment %}
+    <div class="idea-plan-clamped">
+      <input type="checkbox" id="plan-more-{{ idea.pk }}" name="plan-more-{{ idea.pk }}"
+             class="plan-more-toggle">
+      <div class="idea-plan-body">{{ idea.plan_html }}</div>
+      <label class="plan-more-label plan-more-show" for="plan-more-{{ idea.pk }}">Show more</label>
+      <label class="plan-more-label plan-more-hide" for="plan-more-{{ idea.pk }}">Show less</label>
+    </div>
+    {% else %}
+    <div class="idea-plan-body">{{ idea.plan_html }}</div>
+    {% endif %}
+  </div>
+  {% include "core/_idea_artifacts.html" with idea=idea %}
+  {% include "core/_idea_review_details.html" with idea=idea %}
+  {% include "core/_idea_report_details.html" with idea=idea %}
+  <details class="idea-prompt">
+    <summary>Prompt</summary>
+    {% comment %}
+      Fetched the first time the <details> is opened: htmx's `intersect` cannot fire
+      on content a closed <details> does not render (see _idea_lazy.html).
+    {% endcomment %}
+    {% url 'core:idea_prompt' idea.pk as idea_lazy_url %}
+    {% include "core/_idea_lazy.html" %}
+  </details>
+  {% else %}
+  {% comment %}
+    Only reachable here by a planned idea with no plan_html yet -- new and closed
+    ideas include _idea_default_body.html directly, so this is the one planned/verify
+    case that falls back to the default layout.
+  {% endcomment %}
+  {% include "core/_idea_default_body.html" with idea=idea %}
+  {% endif %}

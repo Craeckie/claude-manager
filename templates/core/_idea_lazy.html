@@ -1,0 +1,13 @@
+{% comment %}
+Stand-in for content too heavy to ship with a list of cards (idea #269): the
+rendered and raw plan, report and prompt of every idea made the old overview 2-5 MB.
+htmx fetches `idea_lazy_url` and swaps it in the first time this element is actually
+visible -- `intersect` never fires while it sits in a collapsed idea, a card hidden
+by the filter or a closed <details>, so expanding is what loads it, and the filter
+scripts need no knowledge of it. JS off: link to the idea's own page.
+{% endcomment %}
+<div class="idea-lazy" hx-get="{{ idea_lazy_url }}{{ qs }}"
+     hx-trigger="intersect once" hx-swap="outerHTML">
+  <span class="idea-lazy-note">Loading…</span>
+  <noscript><a href="{% url 'core:idea_detail' idea.pk %}">Open the idea</a></noscript>
+</div>

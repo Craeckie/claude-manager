@@ -1,0 +1,52 @@
+services:
+  web:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      SECRET_KEY: "${SECRET_KEY:-insecure-dev-key-change-for-production}"
+      # Every host name clients use, comma-separated (localhost is always allowed).
+      DOMAIN: "${DOMAIN:-localhost}"
+      # The URL agents use to reach this server (named in MCP tool texts).
+      CM_BASE_URL: "${CM_BASE_URL:-http://localhost:8080}"
+      # Where the project folders are; mount them below for sync_git_status.
+      CM_WORKSPACE_ROOT: /workspace
+      # Optional: web base for commit links of projects not hosted on GitHub.
+      # CM_GIT_WEB_BASE: https://git.example.org/you
+      # redact app: per-case salt + names list. Must be writable and persistent.
+      REDACT_STATE_DIR: /var/lib/claude-manager/redact
+      # redact app: where redacted logs are written; uncomment with its mount below.
+      # LOG_ANALYSIS_ROOT: /cases
+    # The image runs as uid/gid 1000 (see docker/Dockerfile), not root, so every
+    # bind-mount source below must be owned by uid 1000 on the host, and the
+    # redact_state volume must be chowned to 1000:1000 once after any upgrade
+    # from an image that ran as root.
+    volumes:
+      - ../media:/app/media
+      - ../static_collected:/app/static_collected
+      - redact_state:/var/lib/claude-manager/redact
+      # - ${WORKSPACE_DIR:-..}:/workspace:ro
+      # - ${LOG_ANALYSIS_DIR:-../cases}:/cases
+      # Mount production.py if it exists:
+      # - ../claude_manager/production.py:/app/claude_manager/production.py:ro
+    restart: unless-stopped
+
+  # ── Optional: PostgreSQL ───────────────────────────────────────────────────
+  # Uncomment to use Postgres instead of SQLite.
+  # Also add psycopg[binary] to pyproject.toml and update DATABASES in production.py.
+  #
+  # db:
+  #   image: postgres:17-alpine
+  #   environment:
+  #     POSTGRES_DB: claude_manager
+  #     POSTGRES_USER: claude_manager
+  #     POSTGRES_PASSWORD: "${DB_PASSWORD:-changeme}"
+  #   volumes:
+  #     - postgres_data:/var/lib/postgresql/data
+  #   restart: unless-stopped
+
+volumes:
+  redact_state:
+# postgres_data:

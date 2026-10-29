@@ -1,0 +1,32 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+dist/
+*.egg
+
+# Django
+db.sqlite3
+/static_collected/
+/media/
+claude_manager/production.py
+
+# redact app: per-case salt + hosts, dev default (see REDACT_STATE_DIR)
+/.redact-state/
+
+# uv
+.python-version
+
+# Environment
+.env
+
+# Editor
+.idea/
+.vscode/
+*.local.md
+
+# Tooling scratch
+.playwright-mcp/
+core.[0-9]*

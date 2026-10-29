@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+
+{% block title %}Activity{% endblock %}
+
+{% block content %}
+<h1>Activity{% if idea %} · #{{ idea.pk }} {{ idea.title }}{% elif project %} · {{ project.name }}{% endif %}</h1>
+
+<nav class="activity-filters" aria-label="Filter activity">
+  {% for link in who_links %}
+    <a href="{{ link.url }}"{% if link.active %} class="active" aria-current="true"{% endif %}>{{ link.label }}</a>
+  {% endfor %}
+  {% if project or idea or filter_unknown %}
+    <a class="activity-clear-project" href="{{ clear_project_url }}">All activity</a>
+  {% endif %}
+</nav>
+
+{% include "core/_activity_list.html" %}
+{% endblock %}

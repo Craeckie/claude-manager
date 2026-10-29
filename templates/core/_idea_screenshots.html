@@ -1,0 +1,29 @@
+{% comment %}
+The screenshot strip: thumbnails linking to the full image, each with its own delete
+form. Defined once and included from both card branches — a verify idea shows it open
+under the report, any other status shows it inside the report <details> — because an
+idea that has been verified, or reopened out of verify, keeps its evidence and must
+stay able to drop it.
+`idea` and `qs` are inherited from the including template's context.
+{% endcomment %}
+{% if idea.screenshots.all %}
+<div class="idea-screenshots">
+  {% for screenshot in idea.screenshots.all %}
+  <div class="idea-screenshot">
+    <a href="{{ screenshot.image.url }}" target="_blank" rel="noopener">
+      <img src="{{ screenshot.image.url }}" alt="{{ screenshot.caption|default:"Screenshot" }}">
+    </a>
+    {% if screenshot.caption %}
+    <div class="idea-screenshot-caption">{{ screenshot.caption }}</div>
+    {% endif %}
+    <form class="idea-screenshot-delete-form" method="post"
+          action="{% url 'core:screenshot_delete' screenshot.pk %}{{ qs }}"
+          hx-post="{% url 'core:screenshot_delete' screenshot.pk %}{{ qs }}"
+          hx-target="#idea-{{ idea.pk }}" hx-swap="outerHTML">
+      {% csrf_token %}
+      <button type="submit" class="idea-screenshot-delete">Delete</button>
+    </form>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}

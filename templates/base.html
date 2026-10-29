@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}{{ page_title|default:"Claude Manager" }}{% endblock %}</title>
+    {% load static %}
+    <link rel="stylesheet" href="{% static 'css/style.css' %}">
+    <meta name="theme-color" content="#0b4f8f" media="(prefers-color-scheme: light)">
+    <meta name="theme-color" content="#1a1a1a" media="(prefers-color-scheme: dark)">
+    <link rel="manifest" href="{% static 'manifest.webmanifest' %}">
+    <link rel="apple-touch-icon" href="{% static 'icons/apple-touch-icon.png' %}">
+    <link rel="icon" href="{% static 'icons/icon.svg' %}" type="image/svg+xml">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-title" content="Claude Manager">
+    {% block extra_head %}{% endblock %}
+</head>
+<body hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'>
+    <header>
+        {% with here=request.resolver_match.view_name %}
+        <nav aria-label="Main">
+            <a href="{% url 'core:home' %}"{% if here == "core:home" or here == "core:idea_detail" %} aria-current="page"{% endif %}>Ideas</a>
+            <a href="{% url 'core:projects' %}"{% if here == "core:projects" or here == "core:project_detail" %} aria-current="page"{% endif %}>Projects</a>
+            <a href="{% url 'core:activity' %}"{% if here == "core:activity" %} aria-current="page"{% endif %}>Activity</a>
+            <a href="{% url 'redact:index' %}"{% if here == "redact:index" %} aria-current="page"{% endif %}>Redact logs</a>
+            <a href="/admin/" class="nav-admin">Admin</a>
+        </nav>
+        {% endwith %}
+    </header>
+
+    <main>
+        {% if messages %}
+            <ul class="messages">
+                {% for message in messages %}
+                    <li class="message message-{{ message.tags }}">{{ message }}</li>
+                {% endfor %}
+            </ul>
+        {% endif %}
+
+        {% block content %}{% endblock %}
+    </main>
+
+    <footer>
+        <p>&copy; {% now "Y" %} Claude Manager</p>
+    </footer>
+
+    <script src="{% static 'vendor/htmx.min.js' %}" defer></script>
+    {% block extra_scripts %}{% endblock %}
+
+    <script>
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', function () {
+        navigator.serviceWorker.register('/sw.js');
+      });
+    }
+    </script>
+
+    <script>
+    // htmx drops 4xx responses by default. The inline forms answer an invalid
+    // submission with 422 plus the re-rendered form, so that one has to swap.
+    document.addEventListener('htmx:beforeSwap', function (event) {
+      if (event.detail.xhr.status === 422) {
+        event.detail.shouldSwap = true;
+        event.detail.isError = false;
+      }
+    });
+    </script>
+
+    <script>
+    // htmx swallows a failed send (offline, DNS, timeout) and a 5xx response
+    // alike -- without this, a submit on a bad connection looks like nothing
+    // happened, and the only way to notice is to retype and try again.
+    (function () {
+      function requestError(elt) {
+        return elt.parentElement ? elt.parentElement.querySelector('.request-error') : null;
+      }
+      function showRequestError(event) {
+        var elt = event.detail.elt;
+        if (requestError(elt)) {
+          return;
+        }
+        var message = document.createElement('p');
+        message.className = 'request-error';
+        message.textContent = 'Could not reach the server — try again.';
+        elt.insertAdjacentElement('afterend', message);
+      }
+      function clearRequestError(event) {
+        var existing = requestError(event.detail.elt);
+        if (existing) {
+          existing.remove();
+        }
+      }
+      document.body.addEventListener('htmx:sendError', showRequestError);
+      document.body.addEventListener('htmx:responseError', function (event) {
+        if (event.detail.xhr.status >= 500) {
+          showRequestError(event);
+        }
+      });
+      // The form keeps its typed content either way, so clearing on the next
+      // attempt (rather than only on success) means retrying costs one click.
+      document.body.addEventListener('htmx:beforeRequest', clearRequestError);
+    })();
+    </script>
+
+    <script>
+    document.addEventListener('click', function (event) {
+      document.querySelectorAll('details.status-menu[open]').forEach(function (menu) {
+        if (!menu.contains(event.target)) {
+          menu.removeAttribute('open');
+        }
+      });
+    });
+    document.addEventListener('keydown', function (event) {
+      if (event.key === 'Escape') {
+        document.querySelectorAll('details.status-menu[open]').forEach(function (menu) {
+          menu.removeAttribute('open');
+        });
+      }
+    });
+    </script>
+</body>
+</html>

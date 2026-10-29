@@ -1,0 +1,29 @@
+{% comment %}
+Jira-style status control. Expects, via {% include ... with %}:
+  action        base transition URL (the page query string, `qs`, is added here)
+  target_prefix "idea" or "project" — with target_pk, forms the hx-target id
+  target_pk     pk of the object whose card is swapped
+  transitions   allowed Transition tuples; empty renders a plain badge
+  status        status value, for the badge colour class
+  status_label  human-readable status
+`qs` is inherited from the including template's context.
+{% endcomment %}
+{% if transitions %}
+<details class="status-menu">
+  <summary class="badge badge-{{ status }}">{{ status_label }}<span class="status-menu-caret" aria-hidden="true">▾</span></summary>
+  <div class="status-menu-panel">
+    {% for transition in transitions %}
+    <form class="status-menu-form" method="post"
+          action="{{ action }}{{ qs }}"
+          hx-post="{{ action }}{{ qs }}"
+          hx-target="#{{ target_prefix }}-{{ target_pk }}" hx-swap="outerHTML">
+      {% csrf_token %}
+      <input type="hidden" name="target" value="{{ transition.target }}">
+      <button type="submit" class="status-menu-item">{{ transition.label }}</button>
+    </form>
+    {% endfor %}
+  </div>
+</details>
+{% else %}
+<span class="badge badge-{{ status }}">{{ status_label }}</span>
+{% endif %}

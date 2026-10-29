@@ -1,0 +1,44 @@
+{% comment %}
+The artifact list and upload form: any file attached to an idea (log, spec, binary),
+shown as a download-link list with captions and delete buttons. Unlike the screenshot
+strip, this is included unconditionally in every idea status, including new -- a
+brand-new idea can still carry a file, so the upload form is always present, not
+gated behind having a report or an existing attachment.
+`idea` and `qs` are inherited from the including template's context;
+`artifact_error`, when set, is the message from a just-rejected upload.
+{% endcomment %}
+<div class="idea-artifacts">
+  {% if idea.artifacts.all %}
+  <ul class="idea-artifact-list">
+    {% for artifact in idea.artifacts.all %}
+    <li class="idea-artifact">
+      <a href="{% url 'core:artifact_download' artifact.pk %}" target="_blank" rel="noopener">{{ artifact.filename }}</a>
+      <span class="idea-artifact-size">{{ artifact.size|filesizeformat }}</span>
+      {% if artifact.caption %}
+      <span class="idea-artifact-caption">{{ artifact.caption }}</span>
+      {% endif %}
+      <form class="idea-artifact-delete-form" method="post"
+            action="{% url 'core:artifact_delete' artifact.pk %}{{ qs }}"
+            hx-post="{% url 'core:artifact_delete' artifact.pk %}{{ qs }}"
+            hx-target="#idea-{{ idea.pk }}" hx-swap="outerHTML">
+        {% csrf_token %}
+        <button type="submit" class="idea-artifact-delete">Delete</button>
+      </form>
+    </li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+  <form class="idea-artifact-upload-form" method="post" enctype="multipart/form-data"
+        action="{% url 'core:artifact_upload' idea.pk %}{{ qs }}"
+        hx-post="{% url 'core:artifact_upload' idea.pk %}{{ qs }}"
+        hx-encoding="multipart/form-data"
+        hx-target="#idea-{{ idea.pk }}" hx-swap="outerHTML">
+    {% csrf_token %}
+    <input type="file" name="file" class="idea-artifact-upload-file" required>
+    <input type="text" name="caption" class="idea-artifact-upload-caption" placeholder="Caption (optional)">
+    <button type="submit" class="idea-artifact-upload-submit">Attach</button>
+  </form>
+  {% if artifact_error %}
+  <div class="idea-artifact-error">{{ artifact_error }}</div>
+  {% endif %}
+</div>

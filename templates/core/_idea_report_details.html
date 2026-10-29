@@ -1,0 +1,36 @@
+{% comment %}
+A report, and any screenshots, belonging to a non-verify idea (planned, implemented,
+reopened, abandoned): they stay readable after the idea is verified, but they are no
+longer the reason the idea is on the card, so they sit closed next to the plan rather
+than leading. Rendered-only — there is no raw/rendered toggle here either.
+The summary names whichever is actually inside, since a card carrying screenshots and
+no report would be lying if it said "Report".
+{% endcomment %}
+{% if idea.report_html or idea.screenshots.all %}
+<details class="idea-report">
+  <summary>{% if idea.report_html %}Report{% else %}Screenshots{% endif %}</summary>
+  {% if idea.report_html %}
+  <div class="idea-report-body">{{ idea.report_html }}</div>
+  {% endif %}
+  {% include "core/_idea_screenshots.html" with idea=idea %}
+</details>
+{% endif %}
+{% if idea.commits %}
+<details class="idea-commits">
+  <summary>Commits ({{ idea.commits|length }})</summary>
+  <div class="idea-commits-body">
+    {% for commit_url_pair in idea.commit_urls %}
+    <div class="idea-commit-item">
+      {% if commit_url_pair.url %}
+      <a href="{{ commit_url_pair.url }}"
+         target="_blank" rel="noopener noreferrer" title="View commit">
+        <code>{{ commit_url_pair.hash|truncatechars:13 }}</code>
+      </a>
+      {% else %}
+      <code>{{ commit_url_pair.hash|truncatechars:13 }}</code>
+      {% endif %}
+    </div>
+    {% endfor %}
+  </div>
+</details>
+{% endif %}
