@@ -325,6 +325,55 @@ class ListFilterTests(TestCase):
         with self.assertRaises(services.Invalid):
             services.list_ideas(commit="abc")
 
+    def _search_fixture(self):
+        a = Project.objects.create(name="A", folder="a")
+        b = Project.objects.create(name="B", folder="b")
+        Idea.objects.create(project=a, title="Retry uploads", report="The USB mic drops samples.")
+        Idea.objects.create(project=a, title="Mic gain", goal="Louder recordings")
+        Idea.objects.create(project=b, title="Other", review="usb cable is loose")
+        return a, b
+
+    def test_list_ideas_q_matches_a_word_found_only_in_the_report(self):
+        self._search_fixture()
+        titles = {i["title"] for i in services.list_ideas(q="samples")}
+        self.assertEqual(titles, {"Retry uploads"})
+
+    def test_list_ideas_q_is_case_insensitive_and_covers_every_text_field(self):
+        a = Project.objects.create(name="A", folder="a")
+        Idea.objects.create(project=a, title="NEEDLE in the title")
+        for field in ("goal", "context", "notes", "plan", "report", "review"):
+            Idea.objects.create(project=a, title=field, **{field: f"x NEEDLE-{field} y"})
+        Idea.objects.create(project=a, title="unrelated")
+        self.assertEqual(len(services.list_ideas(q="needle")), 7)
+
+    def test_list_ideas_q_requires_every_word_each_in_any_field(self):
+        self._search_fixture()
+        # "usb" is in the report, "retry" in the title: both match the same idea.
+        titles = {i["title"] for i in services.list_ideas(q="usb retry")}
+        self.assertEqual(titles, {"Retry uploads"})
+        # "usb" alone also matches the other project's review.
+        titles = {i["title"] for i in services.list_ideas(q="usb")}
+        self.assertEqual(titles, {"Retry uploads", "Other"})
+
+    def test_list_ideas_q_combines_with_project(self):
+        self._search_fixture()
+        titles = {i["title"] for i in services.list_ideas(q="usb", project="b")}
+        self.assertEqual(titles, {"Other"})
+
+    def test_list_ideas_q_combines_with_commit(self):
+        a, _ = self._search_fixture()
+        Idea.objects.create(project=a, title="Mic fix", report="usb", commits=["abc123def456"])
+        titles = {i["title"] for i in services.list_ideas(q="usb", commit="abc123")}
+        self.assertEqual(titles, {"Mic fix"})
+
+    def test_list_ideas_q_without_hits_returns_empty(self):
+        self._search_fixture()
+        self.assertEqual(services.list_ideas(q="usb nonexistentword"), [])
+
+    def test_list_ideas_blank_q_does_not_filter(self):
+        self._search_fixture()
+        self.assertEqual(len(services.list_ideas(q="   ")), 3)
+
     def test_list_projects_filters_by_status(self):
         Project.objects.create(name="A", folder="a", status=Project.Status.IDEA)
         Project.objects.create(name="B", folder="b", status=Project.Status.IMPLEMENTED)

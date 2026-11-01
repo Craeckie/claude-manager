@@ -289,6 +289,22 @@ class ToolsCallIdeaTests(MCPTestCase):
         result, _ = self.tool_result("list_ideas", {"commit": "abc"})
         self.assertTrue(result.get("isError"))
 
+    def test_list_ideas_exposes_a_text_search(self):
+        tools = {t["name"]: t for t in self.post(rpc("tools/list")).json()["result"]["tools"]}
+        self.assertIn("q", tools["list_ideas"]["inputSchema"]["properties"])
+
+    def test_list_ideas_searches_the_report(self):
+        self.idea.report = "Root cause: the buffer was too small."
+        self.idea.save()
+        _, payload = self.tool_result("list_ideas", {"q": "buffer root"})
+        self.assertEqual([i["title"] for i in payload], ["Add shuffle"])
+        _, payload = self.tool_result("list_ideas", {"q": "buffer nowhere"})
+        self.assertEqual(payload, [])
+
+    def test_get_idea_says_to_keep_lessons_in_docs(self):
+        tools = {t["name"]: t for t in self.post(rpc("tools/list")).json()["result"]["tools"]}
+        self.assertIn("docs/", tools["get_idea"]["description"])
+
     def test_transition_idea_to_implemented(self):
         # new -> planned -> verify -> implemented, the real lifecycle path: Claude
         # Code stops at "verify", and only the user's own move takes it on to

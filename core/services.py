@@ -11,6 +11,7 @@ import subprocess
 from pathlib import Path
 
 from django.core.files.base import ContentFile
+from django.db.models import Q
 from django.utils import timezone
 
 from .forms import IdeaEditForm, IdeaForm, ProjectForm
@@ -300,7 +301,25 @@ def _commit_matches(stored, query):
     return stored == query or stored.startswith(query) or query.startswith(stored)
 
 
-def list_ideas(project=None, status=None, kind=None, open_only=False, commit=None, full=True):
+IDEA_SEARCH_FIELDS = ("title", "goal", "context", "notes", "plan", "report", "review")
+
+
+def _search_ideas(qs, q):
+    """Keep the ideas that contain every whitespace-separated word of ``q``.
+
+    Each word may sit in a different text field; matching is case-insensitive.
+    """
+    for word in q.split():
+        match = Q()
+        for field in IDEA_SEARCH_FIELDS:
+            match |= Q(**{f"{field}__icontains": word})
+        qs = qs.filter(match)
+    return qs
+
+
+def list_ideas(
+    project=None, status=None, kind=None, open_only=False, commit=None, q=None, full=True
+):
     qs = Idea.objects.select_related("project")
     if full:
         qs = qs.prefetch_related("screenshots", "artifacts")
@@ -316,6 +335,8 @@ def list_ideas(project=None, status=None, kind=None, open_only=False, commit=Non
         qs = qs.filter(kind=kind)
     if open_only:
         qs = qs.filter(status__in=OPEN_IDEA_STATUSES)
+    if q:
+        qs = _search_ideas(qs, q)
     if commit is not None:
         if len(commit) < COMMIT_QUERY_MIN_LENGTH:
             raise Invalid(

@@ -192,7 +192,10 @@ TOOLS = [
             "hash, full or abbreviated, that implemented it. Use commit to go from a "
             "bare hash found in git blame/git bisect/git log back to the idea that "
             "produced it -- its goal, plan and report -- before starting a regression "
-            "fix. Returns compact rows (id, project_folder, project_name, title, "
+            "fix. Use q to search past ideas by topic before re-deriving a lesson: "
+            "every word must appear, each in any of title, goal, context, notes, "
+            "plan, report or review (case-insensitive). Returns compact rows (id, "
+            "project_folder, project_name, title, "
             "kind, status, has_plan, has_report, and goal cut to 160 characters) -- "
             "call get_idea for an idea's full text, or pass full=true for full "
             "records, which can run to hundreds of KB for a whole project."
@@ -215,6 +218,14 @@ TOOLS = [
                         "against a full stored hash or vice versa."
                     ),
                 },
+                "q": {
+                    "type": "string",
+                    "description": (
+                        "Search text. Whitespace-separated words that must all "
+                        "appear, each in any text field (title, goal, context, "
+                        "notes, plan, report, review); case-insensitive."
+                    ),
+                },
                 "full": {
                     "type": "boolean",
                     "description": "Return full records instead of compact rows.",
@@ -228,6 +239,7 @@ TOOLS = [
             kind=a.get("kind"),
             open_only=a.get("open_only", False),
             commit=a.get("commit"),
+            q=a.get("q"),
             full=a.get("full", False),
         ),
     },
@@ -247,8 +259,12 @@ TOOLS = [
             + REVIEW_INSTRUCTION
             + " Pass include_prompt=true to also get `prompt`, the same content "
             "rendered as one Markdown prompt (it repeats every section, so it roughly "
-            "doubles the response). Once the work is done, write a short report to the "
-            "`report` field with update_idea -- only possible problems and relevant "
+            "doubles the response). Once the work is done, first move any lesson that "
+            "will matter again (a root cause, a trap, a how-to) into the project's "
+            "docs/ -- the report is never fed back into a later prompt -- and add a "
+            "line to the project's CLAUDE.md only for a new rule or a pointer to that "
+            "doc. Then write a short report to the `report` field with update_idea, "
+            "linking any doc it changed -- only possible problems and relevant "
             "decisions made, as a list of short sentences, or, if there is nothing "
             "relevant, just \"Implemented as planned. Nothing to report.\" -- attach "
             "any screenshots with add_screenshot, and call transition_idea with "

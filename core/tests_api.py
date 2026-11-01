@@ -313,6 +313,12 @@ class IdeaListViewTests(ApiTestCase):
         data = response.json()
         self.assertEqual([i["title"] for i in data], ["A"])
 
+    def test_filter_by_text(self):
+        Idea.objects.create(project=self.project, title="A", plan="Swap the codec")
+        Idea.objects.create(project=self.project, title="B")
+        response = self.client.get(reverse("api:idea_list"), {"q": "CODEC"})
+        self.assertEqual([i["title"] for i in response.json()], ["A"])
+
     def test_commit_too_short_is_400(self):
         response = self.client.get(reverse("api:idea_list"), {"commit": "abc"})
         self.assertEqual(response.status_code, 400)

@@ -249,7 +249,10 @@ def _paths():
             "get": {
                 "operationId": "list_ideas",
                 "summary": "List ideas",
-                "description": "All ideas, optionally filtered by project, status, or openness.",
+                "description": (
+                    "All ideas, optionally filtered by project, status, type, openness, "
+                    "commit, or search text."
+                ),
                 "parameters": [
                     _query_param("project", "A project id or folder name."),
                     _query_param("status", "Filter by lifecycle status.", enum=s.IDEA_STATUS_VALUES),
@@ -265,6 +268,12 @@ def _paths():
                         "A commit hash, full or abbreviated (at least 4 characters), "
                         "that implemented the idea -- matches whichever side of the "
                         "comparison is the shorter prefix.",
+                    ),
+                    _query_param(
+                        "q",
+                        "Search text: whitespace-separated words that must all appear, "
+                        "each in any of title, goal, context, notes, plan, report or "
+                        "review. Case-insensitive.",
                     ),
                     _query_param(
                         "full",

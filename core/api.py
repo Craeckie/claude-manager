@@ -121,6 +121,7 @@ def idea_list(request, body):
         kind=request.GET.get("kind"),
         open_only=_truthy(request.GET.get("open")),
         commit=request.GET.get("commit"),
+        q=request.GET.get("q"),
         # Full by default, unlike the MCP tool: the web card, the curl uploads and
         # CLAUDE.md's "GET /api/ideas/<id>/" checks all expect the whole record.
         full=(request.GET.get("full") or "1").strip().lower() not in ("0", "false"),
