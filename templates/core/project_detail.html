@@ -12,6 +12,7 @@
 
 <div class="project-ideas-head">
   <h2>Ideas</h2>
+  <span class="idea-filter-count" aria-live="polite"></span>
   {% comment %}
     No hx-get: opening the form clones the blank <template> below client-side
     (_new_idea_template.html), so this never round-trips. The href stays so the
@@ -20,11 +21,21 @@
   <a href="{% url 'core:idea_new' project.pk %}{{ qs }}"
      class="admin-link add-idea-link" data-project-pk="{{ project.pk }}">Add idea</a>
   {% if show_closed %}
-  <a class="closed-toggle" href="{% url 'core:project_detail' project.folder %}">Hide closed</a>
+  <a class="closed-toggle" href="{% url 'core:project_detail' project.folder %}{% if q %}?q={{ q|urlencode }}{% endif %}">Hide closed</a>
   {% else %}
-  <a class="closed-toggle" href="{% url 'core:project_detail' project.folder %}?closed=1">Show closed</a>
+  <a class="closed-toggle" href="{% url 'core:project_detail' project.folder %}?closed=1{% if q %}&amp;q={{ q|urlencode }}{% endif %}">Show closed</a>
   {% endif %}
 </div>
+
+{% if ideas %}
+{% comment %}A real GET form, so it works with JavaScript off; static/js/idea-filter.js filters live.{% endcomment %}
+<form class="project-filter" method="get" action="{% url 'core:project_detail' project.folder %}" role="search">
+  <input type="search" name="q" value="{{ q }}" placeholder="Search ideas…" autocomplete="off" aria-label="Search ideas">
+  {% if show_closed %}<input type="hidden" name="closed" value="1">{% endif %}
+  <button type="submit">Search</button>
+  <a class="filter-clear" href="{% url 'core:project_detail' project.folder %}{{ qs }}">Clear</a>
+</form>
+{% endif %}
 
 {% include "core/_project_ideas.html" %}
 </div>
@@ -40,6 +51,7 @@
 {% block extra_scripts %}
 {% load static %}
 <script src="{% static 'js/board.js' %}" defer></script>
+<script src="{% static 'js/idea-filter.js' %}" defer></script>
 {% include "core/_copy_script.html" %}
 {% include "core/_new_idea_script.html" %}
 {% endblock %}

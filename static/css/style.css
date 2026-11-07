@@ -1641,6 +1641,11 @@ ul.idea-detail {
     margin-left: auto;
 }
 
+.idea-filter-count {
+    font-size: 0.85rem;
+    opacity: 0.7;
+}
+
 .project-ideas-head .closed-toggle {
     margin: 0;
 }

@@ -3,7 +3,7 @@
 // Bump CACHE (e.g. "claude-manager-v4") whenever the precache list or the logic
 // below changes, so clients pick up the new version instead of serving stale
 // cached assets.
-const CACHE = "claude-manager-v5";
+const CACHE = "claude-manager-v6";
 
 const PRECACHE = [
   "{% url 'core:offline' %}",

@@ -12,7 +12,7 @@
   the browser's own click-to-toggle behavior on every one of them.
 {% endcomment %}
 <li class="idea{% if idea.is_closed %} idea-closed{% endif %} idea-collapsible" id="idea-{{ idea.pk }}" data-version="{{ idea.card_version }}"
-    {% if view == "ideas" %}data-filter="{{ idea.title }} {{ idea.project.name }} {{ idea.project.folder }}"{% endif %}
+    {% if view == "ideas" %}data-filter="{{ idea.title }} {{ idea.project.name }} {{ idea.project.folder }}"{% elif view == "project" %}data-filter="#{{ idea.pk }} {{ idea.title }} {{ idea.goal }}" data-filter-id="{{ idea.pk }}"{% endif %}
     {% if idea.matches is False %}hidden{% endif %}>
   <input type="checkbox" id="idea-expand-{{ idea.pk }}" class="idea-expand-toggle"{% if view == "idea" or idea.status == "planned" or idea.status == "verify" %} checked{% endif %}>
   {% include "core/_status_menu.html" with action=idea_transition_url target_prefix="idea" target_pk=idea.pk transitions=idea.allowed_transitions status=idea.status status_label=idea.get_status_display %}

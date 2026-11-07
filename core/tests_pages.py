@@ -138,6 +138,38 @@ class ProjectDetailPageTests(TestCase):
         self.assertIn("About alpha.", html)
         self.assertIn('class="badge badge-defined"', html)
 
+    def _hidden(self, html, idea):
+        import re
+        card = re.search(r'<li class="idea[^>]*id="idea-%d"[^>]*>' % idea.pk, html).group(0)
+        return " hidden" in card or card.rstrip(">").endswith("hidden")
+
+    def test_search_box_filters_by_title_goal_and_id(self):
+        self.open.goal = "Make the zebra faster"
+        self.open.save()
+        other = Idea.objects.create(project=self.project, title="Second", goal=f"mentions {self.open.pk} in text")
+        html = self.page().content.decode()
+        self.assertIn('name="q"', html)
+        for query, shown, hidden in [
+            ("open", self.open, other),
+            ("ZEBRA", self.open, other),
+            (str(self.open.pk), self.open, other),
+            ("#" + str(self.open.pk), self.open, other),
+        ]:
+            html = self.page("?q=" + query.replace("#", "%23")).content.decode()
+            self.assertFalse(self._hidden(html, shown), query)
+            self.assertTrue(self._hidden(html, hidden), query)
+        self.assertNotIn('class="empty no-match-message" hidden', self.page("?q=zzz").content.decode())
+
+    def test_search_matching_nothing_says_so_and_keeps_closed(self):
+        html = self.page("?q=zzz&closed=1").content.decode()
+        self.assertIn('class="empty no-match-message">', html)
+        self.assertIn('name="closed" value="1"', html)
+        self.assertIn("closed=1&amp;q=zzz", self.page("?q=zzz").content.decode())
+
+    def test_search_box_hidden_without_ideas(self):
+        Idea.objects.filter(project=self.project).delete()
+        self.assertNotIn('name="q"', self.page().content.decode())
+
     def test_pk_url_redirects_to_the_folder_url(self):
         response = self.client.get(f"/projects/{self.project.pk}/?closed=1")
         self.assertRedirects(response, "/projects/alpha/?closed=1", fetch_redirect_response=False)

@@ -1,6 +1,7 @@
 import hashlib
 import json
 import os
+import re
 from datetime import timedelta
 from urllib.parse import urlencode
 
@@ -126,6 +127,16 @@ def _render_project_card(request, project, page):
     if page.view == "project":
         return render(request, "core/_project_head.html", context)
     return render(request, "core/_project_row.html", context)
+
+
+def _idea_matches(idea, query):
+    """Whether a project page's search box shows `idea`; static/js/idea-filter.js applies
+    the same rule. Digits (optionally `#`-prefixed) match that idea's id exactly."""
+    if not query:
+        return True
+    if re.fullmatch(r"#?\d+", query):
+        return query.lstrip("#") == str(idea.pk)
+    return query.lower() in f"#{idea.pk} {idea.title} {idea.goal}".lower()
 
 
 def _render_project_ideas(request, project, page):
@@ -341,11 +352,16 @@ def project_detail(request, ref):
             return redirect(url + ("?" + query if query else ""))
         raise Http404("no such project")
     page = Page("project", Page.from_request(request).show_closed)
+    query = request.GET.get("q", "").strip()
     ideas = _project_ideas(project, page)
+    for idea in ideas:
+        idea.matches = _idea_matches(idea, query)
     project.visible_ideas = ideas
     context = {
         "project": project,
         "ideas": ideas,
+        "q": query,
+        "no_match": bool(ideas) and not any(idea.matches for idea in ideas),
         "page_title": project.name,
         "lazy": True,
         **_new_idea_template_context(page),

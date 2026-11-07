@@ -3,6 +3,7 @@
   new idea re-renders this whole list (views._render_project_ideas), so the idea lands
   at its sorted place and a fresh slot comes back.
 {% endcomment %}
+{% if ideas %}<p class="empty no-match-message"{% if not no_match %} hidden{% endif %}>No ideas match “<span class="no-match-query">{{ q }}</span>”.</p>{% endif %}
 <ul class="ideas project-ideas" id="project-ideas-{{ project.pk }}">
   <li class="idea-new-slot" id="new-idea-{{ project.pk }}" hidden></li>
   {% for idea in ideas %}
