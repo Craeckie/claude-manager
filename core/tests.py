@@ -1612,7 +1612,7 @@ class ArtifactWebViewTests(TestCase):
             content_type="text/markdown",
             file=SimpleUploadedFile("notes.md", b"# Notes", content_type="text/markdown"),
         )
-        url = reverse("core:artifact_download", args=[artifact.pk])
+        url = reverse("core:artifact_download", args=[artifact.pk]) + "?raw"
         response = self.client.get(url)
         self.assertEqual(response.status_code, 200)
         self.assertNotIn("attachment", response.get("Content-Disposition", ""))
@@ -1691,7 +1691,7 @@ class SandboxedHtmlArtifactTests(TestCase):
         self.assertTrue(response["Content-Type"].startswith("text/html"))
 
     def test_other_media_gets_nosniff_but_no_csp(self):
-        upload = SimpleUploadedFile("notes.md", b"# Notes", content_type="text/markdown")
+        upload = SimpleUploadedFile("notes.txt", b"# Notes", content_type="text/plain")
         self.client.post(reverse("core:artifact_upload", args=[self.idea.pk]), {"file": upload})
         artifact = Artifact.objects.get(idea=self.idea)
         for url in (artifact.file.url, reverse("core:artifact_download", args=[artifact.pk])):
@@ -2357,3 +2357,26 @@ class BackgroundUpdatesTests(TestCase):
         self.assertIn(f'data-idea-card-url="{card}?view=project"', page)
         self.assertIn('data-insert="slot"', page)
         self.assertIn('data-insert="status"', self.client.get("/").content.decode())
+
+
+class MarkdownArtifactRenderTests(TestCase):
+    """A .md under /media/ is served as a sanitized HTML page; ?raw gives the source."""
+
+    def test_media_md_is_rendered_and_raw_is_not(self):
+        import os, tempfile
+        from django.test import override_settings
+        with tempfile.TemporaryDirectory() as root:
+            os.makedirs(f"{root}/artifacts/idea-1")
+            with open(f"{root}/artifacts/idea-1/a.md", "w") as f:
+                f.write("# Title\n\n- one\n- two\n\n<script>alert(1)</script>\n")
+            with override_settings(MEDIA_ROOT=root):
+                r = self.client.get("/media/artifacts/idea-1/a.md")
+                self.assertEqual(r.status_code, 200)
+                self.assertIn("text/html", r["Content-Type"])
+                body = r.content.decode()
+                self.assertIn("<h1>Title</h1>", body)
+                self.assertIn("<li>one</li>", body)
+                self.assertNotIn("<script>", body)
+                self.assertIn("sandbox", r["Content-Security-Policy"])
+                raw = self.client.get("/media/artifacts/idea-1/a.md?raw")
+                self.assertNotIn("text/html", raw["Content-Type"])

@@ -50,7 +50,7 @@ _RAW_TEXT_TAG_RE = re.compile(
 # produces, plus the small set for links and images -- nothing raw HTML could add.
 _ALLOWED_MARKDOWN_TAGS = {
     "p", "br", "hr", "strong", "em", "code", "pre", "blockquote",
-    "ul", "ol", "li", "a", "img", "h1", "h2", "h3", "h4",
+    "ul", "ol", "li", "a", "img", "h1", "h2", "h3", "h4", "h5", "h6",
     "table", "thead", "tbody", "tr", "th", "td",
 }
 _ALLOWED_MARKDOWN_ATTRS = {"a": {"href", "title"}, "img": {"src", "alt", "title"}}

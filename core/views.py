@@ -26,7 +26,7 @@ from .models import (
     Project,
     Screenshot,
 )
-from .security import harden_media_response
+from .security import harden_media_response, is_markdown_name, markdown_page_response
 
 
 def offline(request):
@@ -533,6 +533,9 @@ def artifact_delete(request, pk):
 
 def artifact_download(request, pk):
     artifact = get_object_or_404(Artifact, pk=pk)
+    if is_markdown_name(artifact.filename) and "raw" not in request.GET:
+        with artifact.file.open("rb") as f:
+            return markdown_page_response(f.read(), artifact.filename)
     response = FileResponse(
         artifact.file.open("rb"), content_type=artifact.content_type or "application/octet-stream"
     )
@@ -547,10 +550,12 @@ def artifact_download(request, pk):
 
 
 def media(request, path):
-    """/media/ -- django.views.static.serve plus the upload hardening headers."""
-    return harden_media_response(
-        serve_static(request, path, document_root=settings.MEDIA_ROOT), path
-    )
+    """/media/ -- django.views.static.serve plus the upload hardening headers.
+    A .md file comes back rendered as HTML; add ?raw to get the source."""
+    response = serve_static(request, path, document_root=settings.MEDIA_ROOT)
+    if is_markdown_name(path) and "raw" not in request.GET and response.status_code == 200:
+        return markdown_page_response(b"".join(response.streaming_content), path)
+    return harden_media_response(response, path)
 
 
 @require_POST
