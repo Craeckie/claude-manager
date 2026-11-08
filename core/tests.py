@@ -535,6 +535,14 @@ class IdeaMarkdownFormattingStillRendersTests(TestCase):
         self.assertIn('src="http://example.com/pic.png"', html)
         self.assertIn('alt="alt text"', html)
 
+    def test_idea_edit_link_in_stored_text_points_to_the_view(self):
+        # Stored reports link other ideas as /ideas/<id>/edit/ (idea 586): those must
+        # open the idea's view, not the edit form.
+        html = self._report_html("See [#229](/ideas/229/edit/) and [#3](/ideas/3/).")
+        self.assertIn('href="/ideas/229/"', html)
+        self.assertNotIn("/edit/", html)
+        self.assertIn('href="/ideas/3/"', html)
+
     def test_nested_list_still_renders(self):
         html = self._report_html("- a\n- b\n  - c")
         self.assertEqual(html.count("<li>"), 3)

@@ -92,6 +92,9 @@ def _loosen_markdown(text):
     return "\n".join(result)
 
 
+_IDEA_EDIT_HREF_RE = re.compile(r'href="/ideas/(\d+)/edit/"')
+
+
 def _render_markdown(text, loose=False):
     """Render Markdown to HTML for mark_safe, with any raw HTML in the source
     neutralized rather than passed through.
@@ -116,7 +119,9 @@ def _render_markdown(text, loose=False):
     if loose:
         extensions.append("nl2br")
     rendered = markdown.markdown(unescaped, extensions=extensions)
-    return mark_safe(nh3.clean(rendered, tags=_ALLOWED_MARKDOWN_TAGS, attributes=_ALLOWED_MARKDOWN_ATTRS))
+    cleaned = nh3.clean(rendered, tags=_ALLOWED_MARKDOWN_TAGS, attributes=_ALLOWED_MARKDOWN_ATTRS)
+    # Stored records link other ideas as /ideas/<id>/edit/ (#586): send them to the view.
+    return mark_safe(_IDEA_EDIT_HREF_RE.sub(r'href="/ideas/\1/"', cleaned))
 
 
 def _is_long(text):
