@@ -7,7 +7,8 @@ class IdeaForm(forms.ModelForm):
     class Meta:
         model = Idea
         fields = [
-            "title", "kind", "needs_verification", "goal", "context", "notes", "plan", "report",
+            "title", "priority", "kind", "needs_verification", "goal", "context", "notes", "plan",
+            "report",
             "review", "commits",
         ]
 
@@ -19,6 +20,13 @@ class IdeaForm(forms.ModelForm):
         # choice, which would otherwise read as a sixth, nameless type.
         self.fields["kind"].required = False
         self.fields["kind"].choices = Idea.Kind.choices
+        # Same for priority: omitted means the default, and there is no empty choice.
+        self.fields["priority"].required = False
+        self.fields["priority"].choices = Idea.Priority.choices
+
+    def clean_priority(self):
+        # Like kind: a create or edit that never mentions it means the default.
+        return self.cleaned_data.get("priority") or Idea.Priority.MEDIUM
 
     def clean_kind(self):
         return self.cleaned_data.get("kind") or Idea.Kind.OTHER
@@ -55,7 +63,7 @@ class IdeaCreateForm(IdeaForm):
     # using IdeaForm directly (see services.create_idea). Unlike plan, kind and
     # needs_verification are one click each, so they belong in the add form too.
     class Meta(IdeaForm.Meta):
-        fields = ["title", "kind", "needs_verification", "goal", "context", "notes"]
+        fields = ["title", "priority", "kind", "needs_verification", "goal", "context", "notes"]
 
 
 class ProjectForm(forms.ModelForm):

@@ -94,3 +94,21 @@ class NeedsVerificationMigrationTests(TransactionTestCase):
         Idea = executor.loader.project_state([self.migrate_to]).apps.get_model("core", "Idea")
         self.assertTrue(Idea.objects.get(title="Old").needs_verification)
         self.assertFalse(Idea.objects.create(project_id=project.pk, title="New").needs_verification)
+
+
+class PriorityMigrationTests(TransactionTestCase):
+    # Ideas that existed before the field become medium.
+    migrate_from = ("core", "0012_idea_needs_verification")
+    migrate_to = ("core", "0013_idea_priority")
+
+    def test_existing_ideas_become_medium(self):
+        executor = MigrationExecutor(connection)
+        executor.migrate([self.migrate_from])
+        old_apps = executor.loader.project_state([self.migrate_from]).apps
+        project = old_apps.get_model("core", "Project").objects.create(name="Proj", folder="proj")
+        old_apps.get_model("core", "Idea").objects.create(project=project, title="Old")
+
+        executor = MigrationExecutor(connection)
+        executor.migrate([self.migrate_to])
+        Idea = executor.loader.project_state([self.migrate_to]).apps.get_model("core", "Idea")
+        self.assertEqual(Idea.objects.get(title="Old").priority, "medium")

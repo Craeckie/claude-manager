@@ -13,6 +13,7 @@ PROJECT_STATUS_VALUES = list(Project.Status.values)
 PROJECT_GIT_STATUS_VALUES = list(Project.GitStatus.values)
 IDEA_STATUS_VALUES = list(Idea.Status.values)
 IDEA_KIND_VALUES = list(Idea.Kind.values)
+IDEA_PRIORITY_VALUES = list(Idea.Priority.values)
 
 
 def _transition_targets(transitions_table):
@@ -64,6 +65,11 @@ IDEA_FIELD_SCHEMAS = {
         "type": "string",
         "enum": IDEA_KIND_VALUES,
         "description": _help_text(Idea, "kind"),
+    },
+    "priority": {
+        "type": "string",
+        "enum": IDEA_PRIORITY_VALUES,
+        "description": _help_text(Idea, "priority"),
     },
     "goal": {"type": "string", "description": _help_text(Idea, "goal")},
     "context": {"type": "string", "description": _help_text(Idea, "context")},
@@ -208,6 +214,7 @@ IDEA_SCHEMA = {
                 "means no type was set, not a real category, so it is never displayed."
             ),
         },
+        "priority": IDEA_FIELD_SCHEMAS["priority"],
         "goal": IDEA_FIELD_SCHEMAS["goal"],
         "context": IDEA_FIELD_SCHEMAS["context"],
         "notes": IDEA_FIELD_SCHEMAS["notes"],
@@ -255,6 +262,7 @@ IDEA_SCHEMA = {
         "title",
         "kind",
         "kind_display",
+        "priority",
         "goal",
         "context",
         "notes",

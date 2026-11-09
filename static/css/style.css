@@ -1058,6 +1058,23 @@ details.idea-commits > summary:focus-visible {
     border-color: #7d4a9c;
 }
 
+.idea-priority {
+    display: inline-block;
+    font-size: 0.72rem;
+    padding: 0.05rem 0.4rem;
+    border-radius: 3px;
+    font-weight: 600;
+    border: 1px solid currentColor;
+}
+
+.idea-priority-high {
+    color: #b03a2e;
+}
+
+.idea-priority-low {
+    color: #6b6b6b;
+}
+
 .idea-kind-question {
     color: #8a6d1a;
     border-color: #8a6d1a;

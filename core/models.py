@@ -5,7 +5,7 @@ import markdown
 import nh3
 from django.conf import settings
 from django.db import models
-from django.db.models import Exists, Max, OuterRef
+from django.db.models import Case, Exists, IntegerField, Max, OuterRef, When
 from django.db.models.functions import Coalesce, Greatest
 from django.urls import reverse
 from django.utils import timezone
@@ -211,9 +211,16 @@ class ProjectManager(models.Manager):
 
 class IdeaManager(models.Manager):
     def get_queryset(self):
-        # Recency alone, with no status grouping: an idea that was just written
-        # or just moved is the one being worked on, whatever its status.
-        return super().get_queryset().order_by("-updated_at", "-pk")
+        # Priority first (high, medium, low), then recency with no status grouping: an
+        # idea that was just written or just moved is the one being worked on, whatever
+        # its status.
+        rank = Case(
+            When(priority="high", then=0),
+            When(priority="low", then=2),
+            default=1,
+            output_field=IntegerField(),
+        )
+        return super().get_queryset().order_by(rank, "-updated_at", "-pk")
 
 
 class Project(models.Model):
@@ -354,8 +361,19 @@ class Idea(models.Model):
         QUESTION = "question", "Question"
         OTHER = "other", "Other"
 
+    class Priority(models.TextChoices):
+        LOW = "low", "Low"
+        MEDIUM = "medium", "Medium"
+        HIGH = "high", "High"
+
     project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name="ideas")
     title = models.CharField(max_length=200)
+    priority = models.CharField(
+        max_length=10,
+        choices=Priority.choices,
+        default=Priority.MEDIUM,
+        help_text="How urgent the idea is: low, medium (default) or high. Ideas sort by it.",
+    )
     kind = models.CharField(
         max_length=20,
         choices=Kind.choices,

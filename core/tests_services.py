@@ -814,3 +814,34 @@ class MoveIdeaTests(TestCase):
     def test_create_idea_rejects_project_in_body(self):
         with self.assertRaises(services.Invalid):
             services.create_idea("source", {"title": "T", "project": "target"})
+
+
+class IdeaPriorityTests(TestCase):
+    def setUp(self):
+        self.project = Project.objects.create(name="MusicBox", folder="musicbox")
+
+    def test_default_is_medium_and_can_be_set_on_create_and_update(self):
+        plain = services.create_idea("musicbox", {"title": "Plain"})
+        urgent = services.create_idea("musicbox", {"title": "Urgent", "priority": "high"})
+        self.assertEqual(plain["priority"], "medium")
+        self.assertEqual(urgent["priority"], "high")
+        self.assertEqual(services.update_idea(plain["id"], {"priority": "low"})["priority"], "low")
+        # An update that never mentions it leaves it alone.
+        self.assertEqual(services.update_idea(plain["id"], {"title": "Renamed"})["priority"], "low")
+
+    def test_unknown_priority_is_rejected(self):
+        with self.assertRaises(services.ValidationFailed):
+            services.create_idea("musicbox", {"title": "Bad", "priority": "urgent"})
+
+    def test_ideas_sort_by_priority_then_recency(self):
+        low = services.create_idea("musicbox", {"title": "low", "priority": "low"})
+        high = services.create_idea("musicbox", {"title": "high", "priority": "high"})
+        med_old = services.create_idea("musicbox", {"title": "med old"})
+        med_new = services.create_idea("musicbox", {"title": "med new"})
+        order = [i["id"] for i in services.list_ideas(project="musicbox")]
+        self.assertEqual(order, [high["id"], med_new["id"], med_old["id"], low["id"]])
+        # Touching the low idea does not lift it over a higher priority.
+        services.update_idea(low["id"], {"notes": "touched"})
+        order = [i["id"] for i in services.list_ideas(project="musicbox")]
+        self.assertEqual(order[0], high["id"])
+        self.assertEqual(order[-1], low["id"])

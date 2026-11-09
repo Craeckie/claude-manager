@@ -25,6 +25,9 @@
   {% if view == "ideas" %}
   <a class="idea-project" href="{% url 'core:project_detail' idea.project.folder %}">{{ idea.project.name }}</a>
   {% endif %}
+  {% if idea.priority != "medium" %}
+  <span class="idea-priority idea-priority-{{ idea.priority }}">{{ idea.get_priority_display }}</span>
+  {% endif %}
   {% if idea.kind != "other" %}
   <span class="idea-kind idea-kind-{{ idea.kind }}">{{ idea.get_kind_display }}</span>
   {% endif %}

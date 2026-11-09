@@ -24,8 +24,8 @@ class ProjectAdmin(admin.ModelAdmin):
 
 @admin.register(Idea)
 class IdeaAdmin(admin.ModelAdmin):
-    list_display = ("title", "project", "kind", "status", "updated_at")
-    list_filter = ("status", "kind", "project")
+    list_display = ("title", "project", "priority", "kind", "status", "updated_at")
+    list_filter = ("status", "priority", "kind", "project")
     search_fields = ("title", "goal", "notes")
     fields = (
         "project",

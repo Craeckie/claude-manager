@@ -245,6 +245,23 @@ class ToolsCallIdeaTests(MCPTestCase):
         self.assertFalse(self.read_back(plain["id"])["needs_verification"])
         self.assertTrue(self.read_back(asked["id"])["needs_verification"])
 
+    def test_create_and_update_idea_set_priority(self):
+        _, plain = self.tool_result("create_idea", {"project": "MusicBox", "title": "Plain"})
+        _, urgent = self.tool_result(
+            "create_idea", {"project": "MusicBox", "title": "Urgent", "priority": "high"}
+        )
+        self.assertEqual(self.read_back(plain["id"])["priority"], "medium")
+        self.assertEqual(self.read_back(urgent["id"])["priority"], "high")
+        result, payload = self.tool_result(
+            "update_idea", {"idea_id": plain["id"], "priority": "low"}
+        )
+        self.assertEqual(payload["updated"], ["priority"])
+        self.assertEqual(self.read_back(plain["id"])["priority"], "low")
+        result, _ = self.tool_result(
+            "create_idea", {"project": "MusicBox", "title": "Bad", "priority": "urgent"}
+        )
+        self.assertTrue(result.get("isError"))
+
     def test_update_idea_sets_needs_verification(self):
         result, payload = self.tool_result(
             "update_idea", {"idea_id": self.idea.pk, "needs_verification": True}
@@ -844,7 +861,7 @@ class CompactResponseTests(MCPTestCase):
         _, payload = self.tool_result("list_ideas", {"project": "MusicBox"})
         self.assertEqual(
             set(payload[0]),
-            {"id", "project_folder", "project_name", "title", "kind", "status",
+            {"id", "project_folder", "project_name", "title", "kind", "priority", "status",
              "has_plan", "has_report", "goal"},
         )
         self.assertTrue(payload[0]["has_plan"])

@@ -301,6 +301,10 @@ TOOLS = [
             "design, question or other; a non-other kind becomes a leading \"### Type\" "
             "section of the generated prompt. other is the neutral default and shows "
             "nothing in the prompt, so it never needs setting explicitly. "
+            "priority is low, medium (the default) or high and orders the idea lists, "
+            "high first. Always set it: use the one the user named, otherwise choose "
+            "yourself -- high for blocking, broken or time-sensitive work, medium for "
+            "normal work, low for nice-to-haves. "
             "needs_verification defaults to false: finishing the idea closes it "
             "without the user checking it; pass true when they should. Answers "
             "with the new idea's id, project_folder, title, status and "
@@ -311,6 +315,7 @@ TOOLS = [
                 "project": PROJECT_REF_ARG,
                 "title": _idea_fields["title"],
                 "kind": _idea_fields["kind"],
+                "priority": _idea_fields["priority"],
                 "goal": _idea_fields["goal"],
                 "context": _idea_fields["context"],
                 "notes": _idea_fields["notes"],
@@ -327,7 +332,7 @@ TOOLS = [
     {
         "name": "update_idea",
         "description": (
-            "Edit an idea's title, type (kind), any of its five prompt sections "
+            "Edit an idea's title, type (kind), priority (low, medium or high), any of its five prompt sections "
             "(goal, context, notes, plan, review), its report, or its commits. "
             "Omitted fields are left unchanged. Use plan to store a step-by-step "
             "implementation plan for the idea without implementing it yet. kind is "
@@ -362,6 +367,7 @@ TOOLS = [
                 "project": _idea_fields["project"],
                 "title": _idea_fields["title"],
                 "kind": _idea_fields["kind"],
+                "priority": _idea_fields["priority"],
                 "goal": _idea_fields["goal"],
                 "context": _idea_fields["context"],
                 "notes": _idea_fields["notes"],
