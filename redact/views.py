@@ -14,8 +14,10 @@ one thing a log-redaction feature must never do):
 
 from __future__ import annotations
 
+import itertools
 import os
 
+from django.conf import settings
 from django.core.exceptions import SuspiciousFileOperation
 from django.http import HttpResponse, JsonResponse
 from django.shortcuts import render
@@ -23,11 +25,13 @@ from django.views.decorators.http import require_GET, require_POST
 
 from . import logcat, paths, state
 from .engine import Redactor, leak_check, redact_stream
+from .log_redact import PROFILES, looks_like_build_log
 
 MAX_UPLOAD_BYTES = 64 * 1024 * 1024
 _CHUNK_SIZE = 65536
 _HEADER_PEEK = 8
 _PREVIEW_LINES = 20
+_PROFILE_PEEK_LINES = 200
 
 ARCHIVE_MAGICS = (
     b"PK\x03\x04",  # zip
@@ -130,7 +134,17 @@ def _stream_lines_from(read):
         yield buf.decode("utf-8", errors="replace")
 
 
-def _write_stats(stats_path, stats, leak_hits, line_count, logfilter=None):
+def _resolve_profile(requested, case_name, head_lines):
+    """`auto` picks `build` for a case listed in REDACT_BUILD_CASES or when the
+    first lines look like package-manager / image-build output."""
+    if requested in PROFILES:
+        return requested
+    if case_name.lower() in settings.REDACT_BUILD_CASES:
+        return "build"
+    return "build" if looks_like_build_log("".join(head_lines)) else "default"
+
+
+def _write_stats(stats_path, stats, leak_hits, line_count, logfilter=None, profile="default"):
     total = sum(stats.values())
     lines = [f"{total} replacements:"]
     for kind, n in stats.most_common():
@@ -171,6 +185,8 @@ def _write_stats(stats_path, stats, leak_hits, line_count, logfilter=None):
                 "WARNING: no log lines survived the process filter — the export "
                 "contains no recognised process; nothing to analyse"
             )
+    if profile != "default":
+        lines.append(f"profile: {profile}")
     lines.append(f"{line_count} lines scrubbed")
     if leak_hits:
         lines.append("LEAK CHECK — unredacted matches found:")
@@ -181,7 +197,7 @@ def _write_stats(stats_path, stats, leak_hits, line_count, logfilter=None):
     stats_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-def _do_redact(request, case_name, filename, hosts, read):
+def _do_redact(request, case_name, filename, hosts, read, profile="auto"):
     # case_name arrives already resolved (see paths.resolve_case_name). This check
     # is the last line of defence rather than the user-facing validation: nothing
     # resolve_case_name returns can fail it, so reaching this means a caller built
@@ -193,9 +209,22 @@ def _do_redact(request, case_name, filename, hosts, read):
 
     # Union, never replace: an upload whose names box was empty must not quietly
     # drop what the case already knows and scrub less than the last one did.
+    if profile not in ("auto", *PROFILES):
+        return None, {"error": f"unknown profile {profile!r}"}, 400
     hosts = state.merge_hosts(case_name, hosts)
     salt = state.load_or_create_salt(case_name)
-    redactor = Redactor(salt=salt, hosts=hosts)
+
+    # Peek at the start of the stream for `auto`; the peeked lines are chained
+    # back in front, so nothing is read twice and nothing touches disk.
+    stream = _stream_lines_from(read)
+    try:
+        head = list(itertools.islice(stream, _PROFILE_PEEK_LINES))
+    except ArchiveRejected:
+        return None, {"error": "archive files are not accepted — upload the extracted log text"}, 400
+    except UploadTooLarge:
+        return None, {"error": f"upload exceeds the {MAX_UPLOAD_BYTES // (1024 * 1024)} MB cap"}, 400
+    profile = _resolve_profile(profile, case_name, head)
+    redactor = Redactor(salt=salt, hosts=hosts, profile=profile)
 
     try:
         dest = paths.destination_path(case_name, filename, create_case=True)
@@ -214,7 +243,7 @@ def _do_redact(request, case_name, filename, hosts, read):
         with open(dest, "w", encoding="utf-8", newline="") as out:
             os.chmod(dest, 0o644)
             leak_hits = _empty_counter()
-            lines = logfilter.run(_stream_lines_from(read))
+            lines = logfilter.run(itertools.chain(head, stream))
             for scrubbed in redact_stream(lines, redactor):
                 out.write(scrubbed)
                 line_count += 1
@@ -229,10 +258,11 @@ def _do_redact(request, case_name, filename, hosts, read):
         return None, {"error": f"upload exceeds the {MAX_UPLOAD_BYTES // (1024 * 1024)} MB cap"}, 400
 
     stats_path = dest.with_name(dest.name + ".redaction-stats")
-    _write_stats(stats_path, redactor.stats, leak_hits, line_count, logfilter)
+    _write_stats(stats_path, redactor.stats, leak_hits, line_count, logfilter, profile)
 
     result = {
         "case": case_name,
+        "profile": profile,
         "path": str(dest),
         "filename": dest.name,
         "line_count": line_count,
@@ -277,7 +307,10 @@ def upload(request):
         return JsonResponse({"error": "missing X-Filename header"}, status=400)
 
     try:
-        dest, result, status = _do_redact(request, case_name, filename, hosts, request.read)
+        dest, result, status = _do_redact(
+            request, case_name, filename, hosts, request.read,
+            profile=request.GET.get("profile", "auto") or "auto",
+        )
     except paths.NotConfigured as exc:
         # The salt store is reached lazily, per case, so a broken REDACT_STATE_DIR
         # only surfaces here -- after the LOG_ANALYSIS_ROOT check has passed.
@@ -330,7 +363,10 @@ def paste(request):
             return b""
 
     try:
-        dest, result, status = _do_redact(request, case_name, filename, hosts, read)
+        dest, result, status = _do_redact(
+            request, case_name, filename, hosts, read,
+            profile=request.POST.get("profile", "auto") or "auto",
+        )
     except paths.NotConfigured as exc:
         return _not_configured(request, exc)
     if status != 200:

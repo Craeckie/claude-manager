@@ -23,6 +23,7 @@ from django.test import Client, TestCase, override_settings
 
 from . import logcat, paths, state
 from .engine import Redactor, leak_check, redact_stream
+from .log_redact import looks_like_build_log
 from .views import ARCHIVE_MAGICS, MAX_UPLOAD_BYTES
 
 # Root writes through a 0o555 directory, so a read-only dir can't be faked (CI runs as root).
@@ -2038,3 +2039,153 @@ class RuleGateTests(TestCase):
         red = Redactor(salt=b"\x07" * 32)
         for line in lines:
             self.assertEqual(red._sub(line), red.pattern.sub(red._replace, line), line)
+
+
+BUILD_LOG_HEAD = [
+    "#1 [internal] load build definition from Dockerfile",
+    "#5 [stage-0 2/6] RUN apt-get update",
+    "#5 3.1 Get:1 http://deb.debian.org/debian bookworm InRelease [151 kB]",
+    "#5 3.2 Get:2 http://deb.debian.org/debian bookworm/main amd64 curl amd64 7.88 [315 kB]",
+]
+
+
+class BuildProfileTests(_ScrubMixin, TestCase):
+    def _build(self, lines):
+        return self._scrub(lines, Redactor(salt=b"\x07" * 32, profile="build"))
+
+    def test_public_package_sources_stay_readable_only_in_the_build_profile(self):
+        urls = [
+            "http://de.archive.ubuntu.com/ubuntu/pool/main/c/curl_7.deb",
+            "https://dl-cdn.alpinelinux.org/alpine/v3.20/main/x86_64/APKINDEX.tar.gz",
+            "https://pypi.org/simple/requests/",
+            "https://registry.npmjs.org/left-pad/-/left-pad-1.3.0.tgz",
+            "https://registry-1.docker.io/v2/library/python/manifests/3.12",
+            "https://proxy.golang.org/example.com/mod/@v/list",
+            "https://box1.tail1234ab.ts.net/api/v1/health",
+        ]
+        for url in urls:
+            with self.subTest(url=url):
+                self.assertEqual(self._build([f"Get {url}"]), f"Get {url}\n")
+                self.assertIn("[URL-", self._scrub([f"Get {url}"]))
+
+    def test_query_string_is_still_dropped_on_a_kept_host(self):
+        out = self._build(["GET https://pypi.org/simple/x/?token=abc123 ok"])
+        self.assertNotIn("abc123", out)
+        self.assertIn("https://pypi.org/simple/x/", out)
+
+    def test_other_hosts_and_credentials_are_still_tokenised(self):
+        for url in (
+            "https://git.example.net/alice/repo.git",
+            "https://registry.example.net/v2/app/manifests/latest",
+            "https://alice:s3cret@pypi.org/simple/",
+            "https://pypi.org.example.net/simple/",
+            "https://notgithub.com/x",
+        ):
+            with self.subTest(url=url):
+                out = self._build([f"fetch {url}"])
+                self.assertIn("[URL-", out)
+                self.assertNotIn("example.net", out)
+                self.assertNotIn("s3cret", out)
+
+    def test_image_users_stay_but_the_operators_home_does_not(self):
+        out = self._build(["WORKDIR /home/node/app", "cd /home/alice/projects"])
+        self.assertIn("/home/node/app", out)
+        self.assertNotIn("alice", out)
+        self.assertIn("[USER-", out)
+        self.assertIn("[USER-", self._scrub(["WORKDIR /home/node/app"]))
+
+    def test_webpack_chunk_tags_are_not_peer_keys_in_the_build_profile(self):
+        line = "./app/utils.js 6.74 KiB {1} [aBcDe]"
+        self.assertIn("[aBcDe]", self._build([line]))
+        self.assertIn("[SHORTKEY-", self._scrub([line]))
+
+    def test_a_public_address_in_a_build_line_is_still_redacted(self):
+        out = self._build(["#5 4.0 curl: connect to 93.184.216.34 failed"])
+        self.assertNotIn("93.184.216.34", out)
+        self.assertIn("[IP4-", out)
+
+    def test_unknown_profile_is_rejected(self):
+        with self.assertRaises(ValueError):
+            Redactor(salt=b"x", profile="nope")
+
+    def test_package_versions_are_not_addresses_for_the_leak_check(self):
+        for line in (
+            "Get:193 http://x/ubuntu noble erlang-base amd64 1:25.3.2.8+dfsg-1ubuntu4.8 [10.2 MB]",
+            "Get:56 imagemagick-6-common all 8:6.9.12.98+dfsg1-5.2build2 [69.5 kB]",
+            "apt install pkg=4:26.2.6.3-0ubuntu0.1",
+            "(1/2) Installing libfoo (7.1.2.34-r0)",
+            "libbar 2.4.6.1~deb12u1",
+        ):
+            with self.subTest(line=line):
+                self.assertEqual(leak_check(line).get("ipv4", 0), 0)
+
+    def test_the_version_exemption_does_not_hide_a_real_address(self):
+        for line in (
+            "peer 93.184.216.34 refused",
+            "from 93.184.216.34:443 closed",
+            "addr=93.184.216.34, retrying",
+            "listening on 0.0.0.0 and 93.184.216.34 (public)",
+        ):
+            with self.subTest(line=line):
+                self.assertGreater(leak_check(line).get("ipv4", 0), 0)
+
+    def test_detector_needs_several_build_markers(self):
+        self.assertTrue(looks_like_build_log("\n".join(BUILD_LOG_HEAD)))
+        self.assertFalse(looks_like_build_log("tailscaled: Get:1 https://x is mentioned once"))
+        self.assertFalse(looks_like_build_log("\n".join(["router: link up"] * 50)))
+
+
+class BuildProfileViewTests(TestCase):
+    def setUp(self):
+        self.log_root = _mk_tmp("logs")
+        self.state_root = _mk_tmp("state")
+        self.addCleanup(shutil.rmtree, self.log_root, ignore_errors=True)
+        self.addCleanup(shutil.rmtree, self.state_root, ignore_errors=True)
+        override = override_settings(
+            LOG_ANALYSIS_ROOT=self.log_root, REDACT_STATE_DIR=self.state_root
+        )
+        override.enable()
+        self.addCleanup(override.disable)
+        self.client = Client()
+
+    def _run(self, case, body, profile=None):
+        url = f"/redact/upload/?case={case}"
+        if profile is not None:
+            url += f"&profile={profile}"
+        resp = self.client.post(url, data=body, content_type="application/octet-stream",
+                                HTTP_X_FILENAME="b.log")
+        return resp
+
+    def _out(self, case):
+        return _one_log(self.log_root, case, "b.log").read_text()
+
+    def _body(self):
+        return ("\n".join(BUILD_LOG_HEAD) + "\n#9 WORKDIR /home/node/app\n"
+                "#9 fetch https://git.example.net/alice/x.git\n").encode()
+
+    def test_auto_detects_a_build_log_from_its_first_lines(self):
+        self.assertEqual(self._run("proj", self._body()).status_code, 200)
+        out = self._out("proj")
+        self.assertIn("http://deb.debian.org/debian", out)
+        self.assertIn("/home/node/app", out)
+        self.assertNotIn("example.net", out)
+        stats = _one_log(self.log_root, "proj", "b.log")
+        self.assertIn("profile: build", stats.with_name(stats.name + ".redaction-stats").read_text())
+
+    def test_auto_leaves_an_ordinary_log_on_the_default_profile(self):
+        self._run("plain", b"fetch http://deb.debian.org/debian once\n")
+        self.assertNotIn("deb.debian.org", self._out("plain"))
+
+    def test_explicit_profile_overrides_detection(self):
+        self._run("forced", b"fetch http://deb.debian.org/debian once\n", profile="build")
+        self.assertIn("deb.debian.org", self._out("forced"))
+        self._run("off", self._body(), profile="default")
+        self.assertNotIn("deb.debian.org", self._out("off"))
+
+    def test_configured_case_always_uses_the_build_profile(self):
+        with override_settings(REDACT_BUILD_CASES=frozenset({"nightly"})):
+            self._run("nightly", b"fetch http://deb.debian.org/debian once\n")
+        self.assertIn("deb.debian.org", self._out("nightly"))
+
+    def test_unknown_profile_is_a_400(self):
+        self.assertEqual(self._run("x", b"a\n", profile="bogus").status_code, 400)

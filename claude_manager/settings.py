@@ -164,6 +164,13 @@ MEDIA_ROOT = BASE_DIR / "media"
 # refuses uploads rather than 500ing (see redact/paths.py NotConfigured).
 LOG_ANALYSIS_ROOT = os.environ.get("LOG_ANALYSIS_ROOT", "")
 
+# REDACT_BUILD_CASES: comma-separated case names whose logs always use the
+# redactor's "build" profile (package-manager / image-build runs). Other logs
+# are detected from their first lines; see redact/log_redact.py.
+REDACT_BUILD_CASES = frozenset(
+    c.strip().lower() for c in os.environ.get("REDACT_BUILD_CASES", "").split(",") if c.strip()
+)
+
 # REDACT_STATE_DIR: per-case salt + hosts list, deliberately a *different* tree
 # from LOG_ANALYSIS_ROOT so neither ever lands inside a case's logs/. Gitignored
 # in dev; a named Docker volume in production (see docker-compose.yml).

@@ -353,6 +353,39 @@ URL_KEEP_HOST_ONLY = {
 }
 _SSID_SKIP = ("", "<unknown ssid>")
 
+# Profile "build" (a package-manager / image-build run): public package
+# sources stay readable so a failed fetch can be told from a good one. A host
+# matches exactly or as a subdomain (`de.archive.ubuntu.com`). Anything not
+# listed, and any URL carrying credentials, is still tokenised.
+PROFILES = ("default", "build")
+BUILD_KEEP_URL_HOSTS = (
+    "deb.debian.org", "security.debian.org", "ftp.debian.org", "archive.ubuntu.com",
+    "security.ubuntu.com", "ports.ubuntu.com", "dl-cdn.alpinelinux.org",
+    "deb.nodesource.com", "pypi.org", "files.pythonhosted.org", "registry.npmjs.org",
+    "registry.yarnpkg.com", "rubygems.org", "registry-1.docker.io", "auth.docker.io",
+    "production.cloudflare.docker.com", "ghcr.io", "github.com", "codeload.github.com",
+    "objects.githubusercontent.com", "raw.githubusercontent.com", "proxy.golang.org",
+    "sum.golang.org", "repo.maven.apache.org", "repo1.maven.org", "plugins.gradle.org",
+    "services.gradle.org", "crates.io", "static.crates.io", "index.crates.io",
+    "ts.net",
+)
+# Users baked into public images; /home/<one of these> says nothing about the
+# operator. Any other name is still tokenised.
+BUILD_KEEP_UNIX_USERS = frozenset({
+    "node", "app", "appuser", "runner", "builder", "www-data", "nobody", "root",
+    "ubuntu", "debian", "alpine", "python", "gradle", "vscode",
+})
+# Markers of a package-manager / image-build log, looked for in its first lines.
+BUILD_LOG_MARKERS = re.compile(
+    r"^#\d+ \[[^\]]*(?:stage|internal|\d+/\d+)[^\]]*\]|\bGet:\d+ https?://"
+    r"|^Step \d+/\d+ : "
+)
+
+
+def looks_like_build_log(head: str) -> bool:
+    """True when the start of a log looks like BuildKit / apt / pip output."""
+    return sum(1 for ln in head.splitlines()[:200] if BUILD_LOG_MARKERS.search(ln)) >= 3
+
 # Fields whose quoted value is a device or user name. The optional backslash
 # before each quote covers both a bare JSON field ("Hostname":"laptop") and
 # the same field JSON-escaped inside a logtail "text" value
@@ -374,7 +407,14 @@ class Redactor:
         keep_tailnet_domains: bool = True,
         keep_short_keys: bool = False,
         redact_names: bool = False,
+        profile: str = "default",
     ) -> None:
+        if profile not in PROFILES:
+            raise ValueError(f"unknown profile {profile!r}")
+        self.profile = profile
+        self.build = profile == "build"
+        # webpack chunk tags like `{1} [aBcDe]` are not peer keys in a build log.
+        keep_short_keys = keep_short_keys or self.build
         self.salt = salt
         self.keep_private = keep_private
         self.keep_tailscale_ips = keep_tailscale_ips
@@ -436,6 +476,12 @@ class Redactor:
         if any(addr in net for net in PRIVATE_NETS):
             kind = "lan" + str(addr.version)
         return self.token(kind, text) + zone
+
+    @staticmethod
+    def _build_url_kept(parsed, host: str) -> bool:
+        if "@" in parsed.netloc or not host:
+            return False  # credentials in the URL are never kept
+        return any(host == h or host.endswith("." + h) for h in BUILD_KEEP_URL_HOSTS)
 
     def _replace(self, m: re.Match[str]) -> str:
         kind = GROUP_KIND.get(m.lastgroup or "", m.lastgroup or "")
@@ -547,6 +593,8 @@ class Redactor:
                 host.endswith("." + h) for h in URL_KEEP_HOST_AND_PATH
             ):
                 return f"{parsed.scheme}://{host}{parsed.path}"
+            if self.build and self._build_url_kept(parsed, host):
+                return f"{parsed.scheme}://{parsed.netloc.lower()}{parsed.path}"
             # Query strings carry the identifying material (profile/device
             # ids); never kept, so the whole thing becomes one token.
             return self.token("url", raw)
@@ -567,6 +615,8 @@ class Redactor:
 
         if kind == "unixpath":
             head, _, user = raw.rpartition("/")
+            if self.build and user in BUILD_KEEP_UNIX_USERS:
+                return raw
             return f"{head}/{self.token('user', user.lower())}"
 
         if kind == "email":
@@ -685,6 +735,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                    help="also redact *.ts.net domains (default: left intact)")
     p.add_argument("--keep-short-keys", action="store_true",
                    help="leave bracketed [aBcDe] peer key prefixes intact")
+    p.add_argument("--profile", choices=PROFILES, default="default",
+                   help="'build' keeps public package sources, image users and webpack "
+                        "tags readable in package-manager / image-build logs")
     p.add_argument("--redact-names", action="store_true",
                    help="also redact quoted name=/hostname= field values (default: left intact)")
     p.set_defaults(keep_private=True, keep_tailscale_ips=True, keep_tailnet_domains=True)
@@ -710,6 +763,7 @@ def main(argv: list[str] | None = None) -> int:
         keep_tailnet_domains=args.keep_tailnet_domains,
         keep_short_keys=args.keep_short_keys,
         redact_names=args.redact_names,
+        profile=args.profile,
     )
 
     if not args.files:

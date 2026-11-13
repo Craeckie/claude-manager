@@ -96,6 +96,20 @@ def _ip_is_kept(text: str) -> bool:
     )
 
 
+# A four-part package version (`1:25.3.2.8+dfsg-1`, `8:6.9.12.98+dfsg1`) is not
+# an address. The redactor leaves these alone too (its ipv6 rule swallows the
+# `1:25` first), so the check must not flag them or real hits drown in them.
+_VERSION_EPOCH_RE = re.compile(r"(?<![\w:.])\d{1,2}:$")
+_VERSION_SUFFIX_RE = re.compile(r"(?:\+(?:dfsg|deb|b|git|ds)|~|-\d+(?:ubuntu|deb|build))", re.I)
+
+
+def _is_package_version(line: str, m: re.Match) -> bool:
+    return bool(
+        _VERSION_EPOCH_RE.search(line[max(0, m.start() - 4):m.start()])
+        or _VERSION_SUFFIX_RE.match(line, m.end())
+    )
+
+
 def _string_values(value) -> Iterator[str]:
     if isinstance(value, str):
         yield value
@@ -146,7 +160,7 @@ def _leak_check_entry(line: str) -> Counter:
         hits["email"] += 1
 
     for m in _IPV4_RE.finditer(line):
-        if not _ip_is_kept(m.group()):
+        if not _ip_is_kept(m.group()) and not _is_package_version(line, m):
             hits["ipv4"] += 1
 
     for m in _IPV6_RE.finditer(line):
