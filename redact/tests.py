@@ -7,6 +7,7 @@ between uploads is verified by observing which *placeholder tokens* come back
 in the (public) redacted output, never by peeking at the salt.
 """
 
+import base64
 import json
 import os
 import re
@@ -24,7 +25,7 @@ from django.test import Client, TestCase, override_settings
 
 from . import logcat, paths, state
 from .engine import Redactor, leak_check, redact_stream
-from .log_redact import looks_like_build_log
+from .log_redact import CustomEntryError, looks_like_build_log, read_entry_file
 from .views import ARCHIVE_MAGICS, MAX_UPLOAD_BYTES
 
 # Root writes through a 0o555 directory, so a read-only dir can't be faked (CI runs as root).
@@ -2297,3 +2298,294 @@ class PreviewViewTests(TestCase):
     def test_not_configured_state_dir_shows_a_409(self):
         with override_settings(REDACT_STATE_DIR=""):
             self.assertEqual(self._preview().status_code, 409)
+
+
+# Invented words for the user's own entries (idea 670); none is a real name.
+TERM = "Zorblax"
+PHRASE = "Maple Row 12"
+
+
+def _hdr(entries):
+    """What the app sends: base64 of a UTF-8 JSON list."""
+    return base64.b64encode(json.dumps(entries, ensure_ascii=False).encode("utf-8")).decode()
+
+
+class CustomTermsTests(_ScrubMixin, TestCase):
+    """Own words and regexes (idea 670): `[TERM-...]` placeholders that win over
+    the built-in rules, plus the leak check for any that survive."""
+
+    def _red(self, terms=(), patterns=()):
+        return Redactor(salt=b"\x07" * 32, terms=list(terms), patterns=list(patterns))
+
+    def test_a_term_is_case_insensitive_and_bounded_by_word_edges(self):
+        out = self._red([TERM]).scrub(f"{TERM} {TERM.upper()} {TERM.lower()}, {TERM}ish x{TERM}\n")
+        self.assertEqual(out.count("[TERM-"), 3)
+        self.assertIn(f"{TERM}ish", out)
+        self.assertIn(f"x{TERM}", out)
+        # Anna / Annabel
+        self.assertEqual(self._red(["Anna"]).scrub("Annabel Anna\n").count("[TERM-"), 1)
+
+    def test_the_same_word_in_any_case_gets_one_placeholder_per_salt(self):
+        red = self._red([TERM])
+        a, b = red.scrub(f"{TERM}\n"), red.scrub(f"{TERM.upper()}\n")
+        self.assertEqual(a, b)
+        self.assertEqual(self._red([TERM]).scrub(f"{TERM}\n"), a)  # a new Redactor, same salt
+        other = Redactor(salt=b"\x08" * 32, terms=[TERM]).scrub(f"{TERM}\n")
+        self.assertNotEqual(other, a)
+
+    def test_a_phrase_and_the_longest_term_first(self):
+        out = self._red([TERM, f"{TERM} Corp"]).scrub(f"{TERM} Corp and {TERM}\n")
+        self.assertEqual(out.count("[TERM-"), 2)
+        self.assertNotIn("Corp", out)
+        out = self._red([PHRASE]).scrub(f"at {PHRASE.lower()}.\n")
+        self.assertTrue(out.startswith("at [TERM-") and out.endswith("].\n"))
+
+    def test_a_regex_redacts_every_match(self):
+        out = self._red(patterns=[r"proj-\d{3}"]).scrub("proj-123 and proj-456, proj-7\n")
+        self.assertEqual(out.count("[TERM-"), 2)
+        self.assertIn("proj-7", out)
+
+    def test_a_leading_global_flag_is_allowed_and_a_group_is_too(self):
+        out = self._red(patterns=[r"(?i)(alpha|beta)-key"]).scrub("ALPHA-KEY Beta-key gamma-key\n")
+        self.assertEqual(out.count("[TERM-"), 2)
+        self.assertIn("gamma-key", out)
+
+    def test_terms_win_over_a_rule_that_starts_at_the_same_place(self):
+        # The host rule would otherwise give [NAME-...]; the term comes first.
+        red = Redactor(salt=b"\x07" * 32, hosts=[TERM], terms=[TERM])
+        self.assertIn("[TERM-", red.scrub(f"{TERM}\n"))
+
+    def test_a_term_inside_an_email_or_url_leaves_no_raw_term(self):
+        lines = [
+            f"mail {TERM}@example.com now",
+            f"mail {TERM}.smith@example.com now",
+            f"mail bob.{TERM}@example.com now",
+            f"mail bob@{TERM}.example.com now",
+            f"open https://example.org/{TERM}/x?id={TERM} now",
+            f"open https://{TERM}.example.org/ now",
+            f"login u={TERM}@github now",
+            f"cfg password={TERM}1234 and /home/{TERM}/x",
+        ]
+        red = self._red([TERM])
+        for line in lines:
+            out = red.scrub(line + "\n")
+            self.assertNotIn(TERM.lower(), out.lower(), line)
+            self.assertEqual(leak_check(out, terms=[TERM]).get("custom_term", 0), 0, line)
+        # An address that starts with the term is replaced whole, not just its first word.
+        for line in (f"mail {TERM}@example.com now", f"mail {TERM}.smith@example.com now"):
+            out = red.scrub(line + "\n")
+            self.assertNotIn("smith", out)
+            self.assertNotIn("example.com", out)
+
+    def test_a_term_inside_a_json_row_is_redacted_decoded(self):
+        row = json.dumps({"_msg": f"user {TERM} \u003c{TERM}\u003e done", "x": 1})
+        out = self._red([TERM]).scrub(row + "\n")
+        self.assertNotIn(TERM, out)
+        self.assertEqual(json.loads(out)["x"], 1)
+        self.assertEqual(leak_check(row, terms=[TERM])["custom_term"], 2)
+
+    def test_the_stats_count_terms_under_one_kind(self):
+        red = self._red([TERM], [r"proj-\d+"])
+        red.scrub(f"{TERM} proj-1 proj-2\n")
+        self.assertEqual(red.stats["term"], 3)
+
+    def test_unicode_terms_match_case_insensitively(self):
+        out = self._red(["Müller", "Straße 5"]).scrub("MÜLLER wohnt in der straße 5.\n")
+        self.assertEqual(out.count("[TERM-"), 2)
+
+    def test_regex_metacharacters_in_a_term_are_literal(self):
+        out = self._red(["a.b(c", "C++"]).scrub("x a.b(c y axb(c C++ z\n")
+        self.assertEqual(out.count("[TERM-"), 2)
+        self.assertIn("axb(c", out)
+
+    def test_bad_entries_raise_with_their_index(self):
+        cases = [
+            (dict(patterns=["ok", "("]), "pattern", 1),
+            (dict(patterns=[""]), "pattern", 0),
+            (dict(patterns=["a*"]), "pattern", 0),          # empty match
+            (dict(patterns=[r"\b"]), "pattern", 0),
+            (dict(patterns=["x?"]), "pattern", 0),
+            (dict(patterns=["(?P<email>x)"]), "pattern", 0),  # clashes with a rule's group
+            (dict(patterns=[r"(a)\1"]), "pattern", 0),
+            (dict(patterns=["x" * 2000]), "pattern", 0),
+            (dict(terms=["fine", "  "]), "term", 1),
+            (dict(terms=["two\nlines"]), "term", 0),
+        ]
+        for kwargs, kind, index in cases:
+            with self.subTest(kwargs=str(kwargs)[:40]):
+                with self.assertRaises(CustomEntryError) as cm:
+                    Redactor(salt=b"k", **kwargs)
+                self.assertEqual((cm.exception.kind, cm.exception.index), (kind, index))
+
+    def test_a_pattern_matching_nothing_special_does_not_touch_other_text(self):
+        # Wrapped as a group: an alternation in a pattern stays inside its own entry.
+        out = self._red(patterns=["cat|dog"]).scrub("cat dog bird\n")
+        self.assertEqual(out.count("[TERM-"), 2)
+        self.assertIn("bird", out)
+
+    def test_built_in_rules_still_apply_with_entries_set(self):
+        out = self._red([TERM]).scrub(f"{TERM} from 93.184.216.34 person@example.com\n")
+        for needle in (TERM, "93.184.216.34", "person@example.com"):
+            self.assertNotIn(needle, out)
+
+    def test_leak_check_flags_a_surviving_term_and_pattern(self):
+        hits = leak_check(f"still {TERM.upper()} and proj-123 here",
+                          terms=[TERM], patterns=[r"proj-\d+"])
+        self.assertEqual(hits["custom_term"], 2)
+        self.assertEqual(leak_check(f"{TERM}ish", terms=[TERM]).get("custom_term", 0), 0)
+
+    def test_leak_check_ignores_the_redactors_own_placeholders(self):
+        # `\d+` and the word "term" both occur inside "[TERM-123456]".
+        out = self._red(["term"], [r"\d+"]).scrub("term 42\n")
+        self.assertEqual(leak_check(out, terms=["term"], patterns=[r"\d+"]).get("custom_term", 0), 0)
+        self.assertEqual(leak_check("a [IP4-123456] b", patterns=[r"\d+"]).get("custom_term", 0), 0)
+        self.assertEqual(leak_check("a 123456 b", patterns=[r"\d+"])["custom_term"], 1)
+
+    def test_files_for_the_cli(self):
+        d = Path(_mk_tmp("cli"))
+        self.addCleanup(shutil.rmtree, d, ignore_errors=True)
+        (d / "terms").write_text(f"{TERM}\n\n  {PHRASE}  \n", encoding="utf-8")
+        self.assertEqual(read_entry_file(d / "terms"), [TERM, PHRASE])
+
+
+class CustomTermsViewTests(TestCase):
+    """The headers on upload, preview and paste: base64 JSON, never stored."""
+
+    RAW = f"hello {TERM} and proj-77 at {PHRASE}\nplain line 93.184.216.34\n"
+
+    def setUp(self):
+        self.log_root = _mk_tmp("logs")
+        self.state_root = _mk_tmp("state")
+        self.addCleanup(shutil.rmtree, self.log_root, ignore_errors=True)
+        self.addCleanup(shutil.rmtree, self.state_root, ignore_errors=True)
+        override = override_settings(
+            LOG_ANALYSIS_ROOT=self.log_root, REDACT_STATE_DIR=self.state_root
+        )
+        override.enable()
+        self.addCleanup(override.disable)
+        self.client = Client()
+
+    def _headers(self, terms=None, patterns=None):
+        h = {}
+        if terms is not None:
+            h["HTTP_X_REDACT_TERMS"] = terms if isinstance(terms, str) else _hdr(terms)
+        if patterns is not None:
+            h["HTTP_X_REDACT_PATTERNS"] = patterns if isinstance(patterns, str) else _hdr(patterns)
+        return h
+
+    def _post(self, route, body=None, query="", **headers):
+        return self.client.post(
+            f"/redact/{route}/{query}", data=(body or self.RAW).encode(),
+            content_type="application/octet-stream", HTTP_X_FILENAME="a.log", **headers,
+        )
+
+    def _everything_on_disk(self):
+        out = []
+        for root in (self.log_root, self.state_root):
+            for p in Path(root).rglob("*"):
+                out.append(p.name)
+                if p.is_file():
+                    out.append(p.read_bytes().decode("utf-8", "replace"))
+        return "\n".join(out)
+
+    def test_preview_redacts_terms_and_patterns(self):
+        resp = self._post("preview", **self._headers([TERM, PHRASE], [r"proj-\d+"]))
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        for needle in (TERM, PHRASE, "proj-77", "93.184.216.34"):
+            self.assertNotIn(needle, data["text"])
+        self.assertEqual(data["stats"]["term"], 3)
+        self.assertEqual(data["leak_hits"], {})
+
+    def test_upload_writes_terms_nowhere_but_as_placeholders(self):
+        resp = self._post("upload", query="?case=Proj", **self._headers([TERM, PHRASE], [r"proj-\d+"]))
+        self.assertEqual(resp.status_code, 200)
+        logs = list((Path(self.log_root) / "Proj" / "logs").iterdir())
+        self.assertEqual(len(logs), 2)
+        text = "".join(p.read_text() for p in logs)
+        self.assertIn("[TERM-", text)
+        disk = self._everything_on_disk()
+        for needle in (TERM, TERM.lower(), "Maple", "proj-77"):
+            self.assertNotIn(needle, disk)
+        stats = next(p for p in logs if p.name.endswith(".redaction-stats")).read_text()
+        self.assertIn("term ", stats)
+        self.assertIn("custom entries: 2 terms, 1 patterns", stats)
+        self.assertIn("leak check: clean", stats)
+        # Unlike hosts=, the entries are not remembered by the case.
+        self.assertEqual(state.load_hosts("Proj"), [])
+        self.assertFalse(any("TERM" in str(p) for p in Path(self.state_root).rglob("*")))
+
+    def test_entries_do_not_carry_over_to_the_next_request(self):
+        self._post("upload", query="?case=Proj", **self._headers([TERM]))
+        resp = self._post("preview", query="?case=Proj")
+        self.assertIn(TERM, resp.json()["text"])
+
+    def test_both_headers_are_optional_and_either_alone_works(self):
+        self.assertEqual(self._post("preview").json()["stats"].get("term", 0), 0)
+        self.assertNotIn("proj-77", self._post("preview", **self._headers(patterns=[r"proj-\d+"])).json()["text"])
+        self.assertNotIn(TERM, self._post("preview", **self._headers(terms=[TERM])).json()["text"])
+        self.assertEqual(self._post("preview", **self._headers(terms=[], patterns=[])).status_code, 200)
+
+    def test_non_ascii_entries_decode_as_utf8(self):
+        resp = self._post("preview", "Frau Müller wohnt hier\n", **self._headers(["müller"]))
+        self.assertEqual(resp.status_code, 200)
+        self.assertNotIn("ller", resp.json()["text"])
+
+    def test_malformed_headers_are_400_on_every_route(self):
+        bad_values = [
+            "***not base64***",
+            base64.b64encode(b"\xff\xfe not utf8").decode(),
+            base64.b64encode(b"not json").decode(),
+            base64.b64encode(b'{"a": 1}').decode(),
+            base64.b64encode(b'["ok", 3]').decode(),
+            _hdr(["x"] * 501),
+        ]
+        for value in bad_values:
+            for name in ("terms", "patterns"):
+                for route in ("preview", "upload"):
+                    with self.subTest(value=value[:20], header=name, route=route):
+                        resp = self._post(route, query="?case=Proj", **self._headers(**{name: value}))
+                        self.assertEqual(resp.status_code, 400)
+                        self.assertIn("error", resp.json())
+        # Nothing was created for a refused request.
+        self.assertFalse((Path(self.log_root) / "Proj").exists())
+
+    def test_a_bad_regex_is_a_400_naming_its_index_and_writes_nothing(self):
+        for route in ("preview", "upload"):
+            resp = self._post(route, query="?case=Proj", **self._headers(patterns=["fine", "("]))
+            self.assertEqual(resp.status_code, 400)
+            body = resp.json()
+            self.assertEqual((body["kind"], body["index"]), ("pattern", 1))
+            self.assertIn("pattern 1", body["error"])
+        self.assertFalse((Path(self.log_root) / "Proj").exists())
+
+    def test_a_regex_matching_the_empty_string_is_a_400(self):
+        for pattern in ("a*", r"\b", "x?", "(?:)", "^", "$"):
+            with self.subTest(pattern=pattern):
+                resp = self._post("preview", **self._headers(patterns=[pattern]))
+                self.assertEqual(resp.status_code, 400)
+                self.assertIn("empty string", resp.json()["error"])
+
+    def test_the_entries_never_reach_a_log_line(self):
+        with self.assertNoLogs(level="DEBUG"):
+            self._post("preview", **self._headers([TERM]))
+        with self.assertLogs("django.request", level="WARNING") as cm:
+            self._post("preview", **self._headers(patterns=[f"{TERM}("]))
+        self.assertNotIn(TERM, "\n".join(cm.output))
+
+    def test_the_leak_check_in_a_run_counts_a_term_that_slips_past(self):
+        # A run whose redactor was given no entries, but whose leak check was.
+        from .views import _start_run
+        data = iter([b"has " + TERM.encode() + b" here\n", b""])
+        run = _start_run(lambda n: next(data), "", [], b"s" * 32, "default", [], [])
+        run.terms = [TERM]
+        "".join(run.lines())
+        self.assertEqual(run.leak_hits["custom_term"], 1)
+
+    def test_the_paste_form_reads_the_headers_too(self):
+        resp = self.client.post(
+            "/redact/paste/", data={"case": "Proj", "content": f"x {TERM} y\n"},
+            **self._headers([TERM]),
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertNotIn(TERM, self._everything_on_disk())

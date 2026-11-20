@@ -10,6 +10,9 @@ one thing a log-redaction feature must never do):
 - POST /redact/preview/ — raw body like upload, but the redacted text comes
   back as JSON and nothing is written under LOG_ANALYSIS_ROOT (the log-uploader
   app's "redact & copy").
+- All three read the user's own words and regexes from the X-Redact-Terms and
+  X-Redact-Patterns headers (base64 of a JSON list), never the query string, and
+  never store them.
 - POST /redact/paste/   — JS-off fallback. An ordinary urlencoded POST (a
   <textarea>), bounded by DATA_UPLOAD_MAX_MEMORY_SIZE (16 MB, already raised
   for the screenshot-upload path) rather than the multipart temp-file path.
@@ -17,7 +20,10 @@ one thing a log-redaction feature must never do):
 
 from __future__ import annotations
 
+import base64
+import binascii
 import itertools
+import json
 import os
 from collections import Counter
 
@@ -28,8 +34,8 @@ from django.shortcuts import render
 from django.views.decorators.http import require_GET, require_POST
 
 from . import logcat, paths, state
-from .engine import Redactor, leak_check, redact_stream
-from .log_redact import PROFILES, looks_like_build_log
+from .engine import CustomEntryError, Redactor, leak_check, redact_stream
+from .log_redact import MAX_CUSTOM_ENTRIES, PROFILES, compile_custom, looks_like_build_log
 
 MAX_UPLOAD_BYTES = 64 * 1024 * 1024
 _CHUNK_SIZE = 65536
@@ -62,6 +68,54 @@ def _parse_hosts(raw: str) -> list[str]:
         if name:
             hosts.append(name)
     return hosts
+
+
+class CustomHeaderError(Exception):
+    """X-Redact-Terms / X-Redact-Patterns that cannot be read or used."""
+
+    def __init__(self, message, kind="", index=None):
+        super().__init__(message)
+        self.kind = kind
+        self.index = index
+
+    def response(self):
+        body = {"error": str(self)}
+        if self.kind:
+            body["kind"] = self.kind
+        if self.index is not None:
+            body["index"] = self.index
+        return JsonResponse(body, status=400)
+
+
+def _header_entries(request, header):
+    """A list of strings from a header holding base64 of a UTF-8 JSON list. The
+    entries go in headers, never the query string, so they stay out of access
+    logs and URLs; they are not stored anywhere and not logged."""
+    raw = request.headers.get(header, "").strip()
+    if not raw:
+        return []
+    try:
+        decoded = base64.b64decode(raw + "=" * (-len(raw) % 4), validate=True).decode("utf-8")
+        entries = json.loads(decoded)
+    except (binascii.Error, ValueError):  # UnicodeDecodeError and JSONDecodeError are ValueErrors
+        raise CustomHeaderError(f"{header} is not base64 of a UTF-8 JSON list") from None
+    if not isinstance(entries, list) or not all(isinstance(e, str) for e in entries):
+        raise CustomHeaderError(f"{header} must be a JSON list of strings")
+    if len(entries) > MAX_CUSTOM_ENTRIES:
+        raise CustomHeaderError(f"{header} has more than {MAX_CUSTOM_ENTRIES} entries")
+    return entries
+
+
+def _custom_entries(request):
+    """(terms, patterns) the user sent for this request, validated. Raises
+    CustomHeaderError, which `.response()` turns into a 400 naming the entry."""
+    terms = _header_entries(request, "X-Redact-Terms")
+    patterns = _header_entries(request, "X-Redact-Patterns")
+    try:
+        compile_custom(terms, patterns)
+    except CustomEntryError as exc:
+        raise CustomHeaderError(str(exc), exc.kind, exc.index) from None
+    return terms, patterns
 
 
 def _not_configured(request, exc=None):
@@ -148,7 +202,8 @@ def _resolve_profile(requested, case_name, head_lines):
     return "build" if looks_like_build_log("".join(head_lines)) else "default"
 
 
-def _write_stats(stats_path, stats, leak_hits, line_count, logfilter=None, profile="default"):
+def _write_stats(stats_path, stats, leak_hits, line_count, logfilter=None, profile="default",
+                 custom=(0, 0)):
     total = sum(stats.values())
     lines = [f"{total} replacements:"]
     for kind, n in stats.most_common():
@@ -191,6 +246,9 @@ def _write_stats(stats_path, stats, leak_hits, line_count, logfilter=None, profi
             )
     if profile != "default":
         lines.append(f"profile: {profile}")
+    if any(custom):
+        # Counts only: the entries themselves are never written down.
+        lines.append(f"custom entries: {custom[0]} terms, {custom[1]} patterns")
     lines.append(f"{line_count} lines scrubbed")
     if leak_hits:
         lines.append("LEAK CHECK — unredacted matches found:")
@@ -207,10 +265,12 @@ class _Run:
     the preview (which returns them). `lines()` is a generator; `line_count` and
     `leak_hits` are complete once it is exhausted."""
 
-    def __init__(self, redactor, logfilter, hosts, profile, source):
+    def __init__(self, redactor, logfilter, hosts, profile, source, terms=(), patterns=()):
         self.redactor = redactor
         self.logfilter = logfilter
         self.hosts = hosts
+        self.terms = list(terms)
+        self.patterns = list(patterns)
         self.profile = profile
         self._source = source
         self.line_count = 0
@@ -224,7 +284,7 @@ class _Run:
         # logcat.
         for scrubbed in redact_stream(self.logfilter.run(self._source), self.redactor):
             self.line_count += 1
-            self.leak_hits.update(leak_check(scrubbed, self.hosts))
+            self.leak_hits.update(leak_check(scrubbed, self.hosts, self.terms, self.patterns))
             yield scrubbed
 
 
@@ -234,17 +294,19 @@ def _profile_error(profile):
     return None
 
 
-def _start_run(read, case_name, hosts, salt, profile):
+def _start_run(read, case_name, hosts, salt, profile, terms=(), patterns=()):
     """Peek at the start of the stream for `auto`, then build the redactor. The
     peeked lines are chained back in front, so nothing is read twice and nothing
     touches disk. Raises ArchiveRejected / UploadTooLarge."""
     stream = _stream_lines_from(read)
     head = list(itertools.islice(stream, _PROFILE_PEEK_LINES))
     profile = _resolve_profile(profile, case_name, head)
-    redactor = Redactor(salt=salt, hosts=hosts, profile=profile)
+    redactor = Redactor(
+        salt=salt, hosts=hosts, profile=profile, terms=list(terms), patterns=list(patterns),
+    )
     return _Run(
         redactor, logcat.LogcatFilter(redactor), hosts, profile,
-        itertools.chain(head, stream),
+        itertools.chain(head, stream), terms, patterns,
     )
 
 
@@ -264,7 +326,7 @@ def _filter_warning(logfilter):
     return ""
 
 
-def _do_redact(request, case_name, filename, hosts, read, profile="auto"):
+def _do_redact(request, case_name, filename, hosts, read, profile="auto", terms=(), patterns=()):
     # case_name arrives already resolved (see paths.resolve_case_name). This check
     # is the last line of defence rather than the user-facing validation: nothing
     # resolve_case_name returns can fail it, so reaching this means a caller built
@@ -282,7 +344,7 @@ def _do_redact(request, case_name, filename, hosts, read, profile="auto"):
     salt = state.load_or_create_salt(case_name)
 
     try:
-        run = _start_run(read, case_name, hosts, salt, profile)
+        run = _start_run(read, case_name, hosts, salt, profile, terms, patterns)
     except ArchiveRejected:
         return None, _ARCHIVE_ERROR, 400
     except UploadTooLarge:
@@ -311,7 +373,8 @@ def _do_redact(request, case_name, filename, hosts, read, profile="auto"):
     line_count, leak_hits = run.line_count, run.leak_hits
 
     stats_path = dest.with_name(dest.name + ".redaction-stats")
-    _write_stats(stats_path, redactor.stats, leak_hits, line_count, logfilter, profile)
+    _write_stats(stats_path, redactor.stats, leak_hits, line_count, logfilter, profile,
+                 (len(terms), len(patterns)))
 
     result = {
         "case": case_name,
@@ -347,11 +410,16 @@ def upload(request):
 
     if not filename:
         return JsonResponse({"error": "missing X-Filename header"}, status=400)
+    try:
+        terms, patterns = _custom_entries(request)
+    except CustomHeaderError as exc:
+        return exc.response()
 
     try:
         dest, result, status = _do_redact(
             request, case_name, filename, hosts, request.read,
             profile=request.GET.get("profile", "auto") or "auto",
+            terms=terms, patterns=patterns,
         )
     except paths.NotConfigured as exc:
         # The salt store is reached lazily, per case, so a broken REDACT_STATE_DIR
@@ -370,7 +438,12 @@ def preview(request):
     `?case=` borrows that case's salt and names (read-only: no case folder is
     created, and the names box is not merged), so placeholders match its logs.
     Without it a fixed state key `_preview` supplies a persistent salt.
-    `?profile=` as for upload. Same size cap and archive refusal as upload."""
+    `?profile=` as for upload. Same size cap and archive refusal as upload.
+    `X-Redact-Terms` / `X-Redact-Patterns` as for upload; a bad regex is a 400."""
+    try:
+        terms, patterns = _custom_entries(request)
+    except CustomHeaderError as exc:
+        return exc.response()
     try:
         raw_case = request.GET.get("case", "").strip()
         if raw_case:
@@ -389,7 +462,7 @@ def preview(request):
         return _not_configured(request, exc)
 
     try:
-        run = _start_run(request.read, case_name, hosts, salt, profile)
+        run = _start_run(request.read, case_name, hosts, salt, profile, terms, patterns)
         text = "".join(run.lines())
     except ArchiveRejected:
         return JsonResponse(_ARCHIVE_ERROR, status=400)
@@ -433,6 +506,10 @@ def paste(request):
         case_name = paths.resolve_case_name(raw_case)
     except paths.ReservedCaseName as exc:
         return page(raw_case, status=400, error=str(exc))
+    try:
+        terms, patterns = _custom_entries(request)
+    except CustomHeaderError as exc:
+        return page(case_name, status=400, error=str(exc))
 
     if not content:
         return page(case_name, status=400, error="paste some log text first")
@@ -452,6 +529,7 @@ def paste(request):
         dest, result, status = _do_redact(
             request, case_name, filename, hosts, read,
             profile=request.POST.get("profile", "auto") or "auto",
+            terms=terms, patterns=patterns,
         )
     except paths.NotConfigured as exc:
         return _not_configured(request, exc)

@@ -8,6 +8,7 @@ line-at-a-time redaction, and a post-hoc leak check over the redacted output.
 
 from __future__ import annotations
 
+import functools
 import ipaddress
 import re
 from collections import Counter
@@ -16,11 +17,11 @@ from urllib.parse import urlsplit
 
 from .log_redact import (
     DISPNAME_BODY, JSON_ID_FIELDS, KEEP_EXACT, KEEP_NETS, KEEP_REALMS, PASSWORD_KEEP,
-    PRIVATE_NETS, RULES, SQL_MARKER, SQL_PART, TAILSCALE_NETS, URL_KEEP_HOST_ONLY, Redactor,
-    _SSID_SKIP, json_row,
+    PLACEHOLDER_SPLIT, PRIVATE_NETS, RULES, SQL_MARKER, SQL_PART, TAILSCALE_NETS,
+    URL_KEEP_HOST_ONLY, CustomEntryError, Redactor, _SSID_SKIP, compile_custom, json_row,
 )
 
-__all__ = ["redact_stream", "leak_check", "Redactor"]
+__all__ = ["redact_stream", "leak_check", "Redactor", "CustomEntryError"]
 
 
 def redact_stream(lines: Iterable[str], redactor: Redactor) -> Iterator[str]:
@@ -121,23 +122,52 @@ def _string_values(value) -> Iterator[str]:
             yield from _string_values(v)
 
 
-def leak_check(line: str, names: list[str] | None = None) -> Counter:
+@functools.lru_cache(maxsize=8)
+def _custom_matchers(terms: tuple[str, ...], patterns: tuple[str, ...]) -> list[re.Pattern[str]]:
+    return compile_custom(list(terms), list(patterns))
+
+
+def _custom_hits(text: str, matchers: list[re.Pattern[str]]) -> int:
+    """User entries still readable in `text`. The redactor's own placeholders are
+    cut out first: a pattern like `\\d+` or a term like "term" would otherwise
+    match the hex or the kind inside `[TERM-0a1b2c]` and flag every line."""
+    n = 0
+    for segment in PLACEHOLDER_SPLIT.split(text):
+        for rx in matchers:
+            n += sum(1 for m in rx.finditer(segment) if m.end() > m.start())
+    return n
+
+
+def leak_check(
+    line: str,
+    names: list[str] | None = None,
+    terms: list[str] | None = None,
+    patterns: list[str] | None = None,
+) -> Counter:
     """Count anything in `line` that still looks like a public IPv4/IPv6
     address or an email — i.e. something the redactor should have caught but
     didn't — minus the keep-list (loopback, multicast, TEST-NET, private,
     Tailscale, ::1, ...). A JSON-lines row is checked value by value,
-    decoded, the way the redactor scrubbed it."""
+    decoded, the way the redactor scrubbed it. The user's own `terms` (whole
+    words, any case) and `patterns` (regexes) count as `custom_term` when one is
+    still there."""
+    matchers = _custom_matchers(tuple(terms or ()), tuple(patterns or ())) if (terms or patterns) else []
     row = json_row(line.rstrip("\r\n"))
     if row is not None:
         hits: Counter = Counter()
         for value in _string_values(row):
             hits.update(_leak_check_entry(value))
+            if matchers:
+                if n := _custom_hits(value, matchers):
+                    hits["custom_term"] += n
         for key in JSON_ID_FIELDS:
             value = row.get(key)
             if isinstance(value, str) and value and not _PLACEHOLDER_RE.match(value):
                 hits["jsonid"] += 1
     else:
         hits = _leak_check_entry(line)
+        if matchers and (n := _custom_hits(line, matchers)):
+            hits["custom_term"] += n
     if names:
         for name in names:
             if name and name in line:

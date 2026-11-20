@@ -26,7 +26,9 @@ from: RFC1918/link-local/ULA addresses, the CGNAT range VPNs such as Tailscale
 use (100.64.0.0/10, fd7a:115c:a1e0::/48), `*.ts.net` names and device names.
 Pass --redact-private/--redact-tailscale-ips/--redact-tailnet/--redact-names
 to scrub those too. A server's own hostnames are in no rule: pass them with
---hosts.
+--hosts, and any other word of your own (a name, a street, a codename) with
+--terms-file (one whole word or phrase per line, any case) or --patterns-file
+(one regular expression per line); both become [TERM-...] and win over the rules.
 
 JSON-lines exports are decoded, scrubbed value by value and re-encoded, so
 they stay valid JSON: VictoriaLogs (`_msg`), Loki `logcli --output=jsonl`
@@ -397,6 +399,135 @@ JSON_NAME_FIELDS = (
 )
 
 
+# --------------------------------------------------------------------------
+# The user's own entries (idea 670): plain words/phrases and regexes.
+# --------------------------------------------------------------------------
+
+MAX_CUSTOM_ENTRIES = 500
+MAX_CUSTOM_LENGTH = 1024
+
+# A term made only of these characters can open an address; see _custom_source.
+_LOCAL_CHARS = re.compile(r"[A-Za-z0-9._%+-]+")
+_EMAIL_TAIL = r"[A-Za-z0-9._%+-]*(?:@|%40)[A-Za-z0-9.-]+\.[A-Za-z]{2,}"
+# A built-in placeholder; a custom entry is never matched inside one.
+PLACEHOLDER_SPLIT = re.compile(r"\[[A-Z0-9]+-[0-9a-f]+\]")
+_LEADING_FLAGS = re.compile(r"^\(\?([aiLmsux]+)\)")
+_NUMERIC_REF = re.compile(r"(?<!\\)(?:\\\\)*\\[1-9]")
+# Texts a pattern is tried on to catch one that matches the empty string.
+_EMPTY_PROBES = ("", "a", " ", "a b", "Ab1_-.@/:", "Hello World 123 foo.bar\n")
+
+
+class CustomEntryError(ValueError):
+    """A user's term or regex that cannot be used. `kind` is "term" or "pattern",
+    `index` its position in the list it came in (0-based; None when the whole
+    list is at fault)."""
+
+    def __init__(self, kind: str, index: int | None, reason: str) -> None:
+        super().__init__(reason if index is None else f"{kind} {index}: {reason}")
+        self.kind = kind
+        self.index = index
+        self.reason = reason
+
+
+def _wrap_pattern(pattern: str) -> str:
+    """The pattern as one non-capturing group. A leading global flag `(?i)` is
+    only legal at the start of a whole pattern, so it becomes `(?i:...)`."""
+    m = _LEADING_FLAGS.match(pattern)
+    if m:
+        return f"(?{m.group(1)}:{pattern[m.end():]})"
+    return f"(?:{pattern})"
+
+
+def _check_pattern(index: int, pattern: str) -> str:
+    """Validate one regex on its own, with the same engine that will run it, and
+    return its wrapped form. Raises CustomEntryError."""
+    def bad(reason: str) -> CustomEntryError:
+        return CustomEntryError("pattern", index, reason)
+
+    if not isinstance(pattern, str) or not pattern.strip():
+        raise bad("empty")
+    if len(pattern) > MAX_CUSTOM_LENGTH:
+        raise bad(f"longer than {MAX_CUSTOM_LENGTH} characters")
+    try:
+        compiled = re.compile(pattern)
+    except re.error as exc:
+        raise bad(f"invalid regular expression: {exc}") from exc
+    # The pattern joins the redactor's combined one, where group names and numbers
+    # are shared: a name could clash with a rule's, `\1` would point one group off.
+    if compiled.groupindex:
+        raise bad("named groups are not supported; use (?:...) or plain (...)")
+    if _NUMERIC_REF.search(pattern) or "(?(" in pattern:
+        raise bad("group references and conditionals are not supported")
+    wrapped = _wrap_pattern(pattern)
+    try:
+        wrapped_re = re.compile(wrapped)
+    except re.error as exc:
+        raise bad(f"invalid regular expression: {exc}") from exc
+    # An empty match would put a placeholder between every character.
+    if any(m.end() == m.start() for probe in _EMPTY_PROBES for m in wrapped_re.finditer(probe)):
+        raise bad("matches the empty string")
+    return wrapped
+
+
+def _check_term(index: int, term) -> str:
+    if not isinstance(term, str) or not term.strip():
+        raise CustomEntryError("term", index, "empty")
+    term = term.strip()
+    if len(term) > MAX_CUSTOM_LENGTH or "\n" in term or "\r" in term:
+        raise CustomEntryError("term", index, "too long or spans lines")
+    return term
+
+
+def _custom_source(terms: list[str], patterns: list[str]) -> str:
+    """The regex source of the `term` alternative: every term as a
+    case-insensitive literal with word boundaries (longest first), then each
+    pattern. Raises CustomEntryError."""
+    clean: list[str] = []
+    seen: set[str] = set()
+    for i, raw in enumerate(terms):
+        t = _check_term(i, raw)
+        if t.lower() not in seen:
+            seen.add(t.lower())
+            clean.append(t)
+    wrapped = [_check_pattern(i, p) for i, p in enumerate(patterns)]
+    if len(clean) + len(wrapped) > MAX_CUSTOM_ENTRIES:
+        raise CustomEntryError("term", None, f"more than {MAX_CUSTOM_ENTRIES} entries")
+
+    # A term that is itself a valid start of an email address ("alice") must not
+    # win a tie against the email rule at the address's first character: it
+    # would leave "@example.com" readable. Followed by an address tail it steps
+    # aside, so the whole address becomes one placeholder instead.
+    def literal(t: str) -> str:
+        guard = f"(?!{_EMAIL_TAIL})" if _LOCAL_CHARS.fullmatch(t) else ""
+        return re.escape(t) + "(?!\\w)" + guard
+
+    alts = []
+    if clean:
+        alts.append("(?i:(?<!\\w)(?:" + "|".join(
+            literal(t) for t in sorted(clean, key=len, reverse=True)) + "))")
+    alts.extend(wrapped)
+    return "(?:" + "|".join(alts) + ")"
+
+
+def compile_custom(terms: list[str] | None, patterns: list[str] | None) -> list[re.Pattern[str]]:
+    """The user's entries as compiled matchers, for the leak check: one for the
+    terms together, one per pattern. A term only counts as a leak at word
+    boundaries, exactly where the redactor would have replaced it."""
+    matchers: list[re.Pattern[str]] = []
+    terms = [_check_term(i, t) for i, t in enumerate(terms or [])]
+    if terms:
+        alts = "|".join(re.escape(t) for t in sorted(set(terms), key=len, reverse=True))
+        matchers.append(re.compile(f"(?i:(?<!\\w)(?:{alts})(?!\\w))"))
+    for i, p in enumerate(patterns or []):
+        matchers.append(re.compile(_check_pattern(i, p)))
+    return matchers
+
+
+def read_entry_file(path: Path) -> list[str]:
+    """One entry per line; blank lines are skipped."""
+    return [ln.strip() for ln in path.read_text(encoding="utf-8").splitlines() if ln.strip()]
+
+
 class Redactor:
     def __init__(
         self,
@@ -408,9 +539,14 @@ class Redactor:
         keep_short_keys: bool = False,
         redact_names: bool = False,
         profile: str = "default",
+        terms: list[str] | None = None,
+        patterns: list[str] | None = None,
     ) -> None:
         if profile not in PROFILES:
             raise ValueError(f"unknown profile {profile!r}")
+        # The user's own words and regexes (idea 670), one `term` alternative that
+        # goes before every other rule. Raises CustomEntryError (a ValueError).
+        custom = _custom_source(terms or [], patterns or []) if (terms or patterns) else None
         self.profile = profile
         self.build = profile == "build"
         # webpack chunk tags like `{1} [aBcDe]` are not peer keys in a build log.
@@ -435,6 +571,8 @@ class Redactor:
             if hosts:
                 alts = "|".join(re.escape(h) for h in sorted(hosts, key=len, reverse=True))
                 parts.insert(0, f"(?P<host>(?<![\\w.-])(?:{alts})(?![\\w-]))")
+            if custom:
+                parts.insert(0, f"(?P<term>{custom})")
             return re.compile("|".join(parts))
 
         self._build = build
@@ -486,6 +624,11 @@ class Redactor:
     def _replace(self, m: re.Match[str]) -> str:
         kind = GROUP_KIND.get(m.lastgroup or "", m.lastgroup or "")
         raw = m.group()
+
+        if kind == "term":
+            # Lower case: "Anna" and "ANNA" are one placeholder. A pattern that
+            # matched nothing (a lookahead alone) has nothing to replace.
+            return self.token("term", raw.lower()) if raw else raw
 
         if kind in ("ipv4", "ipv6"):
             return self._ip(raw)
@@ -738,6 +881,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--profile", choices=PROFILES, default="default",
                    help="'build' keeps public package sources, image users and webpack "
                         "tags readable in package-manager / image-build logs")
+    p.add_argument("--terms-file", type=Path,
+                   help="file with one word or phrase per line, redacted as [TERM-...] "
+                        "(case-insensitive, whole words)")
+    p.add_argument("--patterns-file", type=Path,
+                   help="file with one regular expression per line, redacted as [TERM-...]")
     p.add_argument("--redact-names", action="store_true",
                    help="also redact quoted name=/hostname= field values (default: left intact)")
     p.set_defaults(keep_private=True, keep_tailscale_ips=True, keep_tailnet_domains=True)
@@ -755,16 +903,22 @@ def main(argv: list[str] | None = None) -> int:
     if args.hosts_file:
         hosts += [ln.strip() for ln in args.hosts_file.read_text().splitlines() if ln.strip()]
 
-    red = Redactor(
-        salt=load_salt(args.salt_file),
-        hosts=hosts,
-        keep_private=args.keep_private,
-        keep_tailscale_ips=args.keep_tailscale_ips,
-        keep_tailnet_domains=args.keep_tailnet_domains,
-        keep_short_keys=args.keep_short_keys,
-        redact_names=args.redact_names,
-        profile=args.profile,
-    )
+    try:
+        red = Redactor(
+            salt=load_salt(args.salt_file),
+            hosts=hosts,
+            keep_private=args.keep_private,
+            keep_tailscale_ips=args.keep_tailscale_ips,
+            keep_tailnet_domains=args.keep_tailnet_domains,
+            keep_short_keys=args.keep_short_keys,
+            redact_names=args.redact_names,
+            profile=args.profile,
+            terms=read_entry_file(args.terms_file) if args.terms_file else None,
+            patterns=read_entry_file(args.patterns_file) if args.patterns_file else None,
+        )
+    except CustomEntryError as exc:
+        print(f"log_redact: {exc}", file=sys.stderr)
+        return 2
 
     if not args.files:
         sys.stdout.write(red.scrub(sys.stdin.read()))
