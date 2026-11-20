@@ -23,6 +23,10 @@ from .paths import NotConfigured, is_valid_case_name
 
 _SALT_BYTES = 32
 
+# State key for previews that name no case. It starts with an underscore, which
+# is_valid_case_name refuses, so it can never be (or collide with) a real case.
+PREVIEW_KEY = "_preview"
+
 
 def state_root() -> Path:
     """The directory holding every case's salt and names, created on first use.
@@ -55,7 +59,7 @@ def _case_dir(case_name: str) -> Path:
     # The view validates before it gets here, but this module builds a filesystem
     # path out of user input, so it does not take that on trust: one refactor that
     # reorders the checks in views._do_redact would otherwise be a traversal.
-    if not is_valid_case_name(case_name):
+    if case_name != PREVIEW_KEY and not is_valid_case_name(case_name):
         raise SuspiciousFileOperation(f"invalid case name: {case_name!r}")
     d = state_root() / case_name
     d.mkdir(parents=True, exist_ok=True)

@@ -13,6 +13,7 @@ import re
 import shutil
 import tempfile
 import unittest
+from unittest import mock
 from collections import Counter
 from datetime import datetime
 from pathlib import Path
@@ -2189,3 +2190,110 @@ class BuildProfileViewTests(TestCase):
 
     def test_unknown_profile_is_a_400(self):
         self.assertEqual(self._run("x", b"a\n", profile="bogus").status_code, 400)
+
+
+class PreviewViewTests(TestCase):
+    """POST /redact/preview/ (idea 669): redacted text back as JSON, nothing saved."""
+
+    RAW = (
+        "mail person@example.com from 93.184.216.34\n"
+        "hook https://hooks.example.org/in?token=abc123def456\n"
+    )
+
+    def setUp(self):
+        self.log_root = _mk_tmp("logs")
+        self.state_root = _mk_tmp("state")
+        self.addCleanup(shutil.rmtree, self.log_root, ignore_errors=True)
+        self.addCleanup(shutil.rmtree, self.state_root, ignore_errors=True)
+        override = override_settings(
+            LOG_ANALYSIS_ROOT=self.log_root, REDACT_STATE_DIR=self.state_root
+        )
+        override.enable()
+        self.addCleanup(override.disable)
+        self.client = Client()
+
+    def _preview(self, body=None, query="", client=None):
+        if body is None:
+            body = self.RAW
+        if isinstance(body, str):
+            body = body.encode()
+        return (client or self.client).post(
+            f"/redact/preview/{query}", data=body,
+            content_type="application/octet-stream",
+        )
+
+    def _tree(self):
+        return sorted(str(p.relative_to(self.log_root)) for p in Path(self.log_root).rglob("*"))
+
+    def test_redacts_email_public_ip_and_token_url(self):
+        resp = self._preview()
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        for needle in ("person@example.com", "93.184.216.34", "abc123def456", "hooks.example.org"):
+            self.assertNotIn(needle, data["text"])
+        self.assertEqual(data["line_count"], 2)
+        self.assertEqual(data["leak_hits"], {})
+        self.assertEqual(data["profile"], "default")
+        self.assertGreaterEqual(sum(data["stats"].values()), 3)
+        self.assertEqual(data["text"].count("\n"), 2)
+
+    def test_writes_nothing_under_the_log_analysis_root(self):
+        self._preview()
+        self._preview(query="?case=Proj")
+        self.assertEqual(self._tree(), [])
+
+    def test_same_text_gets_the_same_placeholders_as_an_upload_to_that_case(self):
+        self.client.post(
+            "/redact/upload/?case=2025-01-15-router", data=self.RAW.encode(),
+            content_type="application/octet-stream", HTTP_X_FILENAME="a.log",
+        )
+        uploaded = _one_log(self.log_root, "2025-01-15-router", "a.log").read_text()
+        resp = self._preview(query="?case=2025-01-15-router")
+        self.assertEqual(resp.json()["text"], uploaded)
+        # Without a case the salt is another one, so the tokens differ.
+        self.assertNotEqual(self._preview().json()["text"], uploaded)
+
+    def test_the_default_salt_persists_between_calls(self):
+        self.assertEqual(self._preview().json()["text"], self._preview().json()["text"])
+        self.assertTrue((Path(self.state_root) / state.PREVIEW_KEY / "salt").is_file())
+
+    def test_preview_key_can_never_be_a_case_name(self):
+        self.assertFalse(paths.is_valid_case_name(state.PREVIEW_KEY))
+        with self.assertRaises(SuspiciousFileOperation):
+            state.salt_path("_other")
+
+    def test_a_case_names_are_used_but_not_changed(self):
+        state.save_hosts("proj", ["desk1-desktop"])
+        text = self._preview("Jan 15 desk1-desktop cron[1]: hi\n", query="?case=proj").json()["text"]
+        self.assertNotIn("desk1-desktop", text)
+        self.assertEqual(state.load_hosts("proj"), ["desk1-desktop"])
+
+    def test_missing_csrf_token_is_a_403(self):
+        strict = Client(enforce_csrf_checks=True)
+        self.assertEqual(self._preview(client=strict).status_code, 403)
+
+    def test_oversize_body_is_a_400(self):
+        with mock.patch("redact.views.MAX_UPLOAD_BYTES", 4096):
+            resp = self._preview(("x" * 100 + "\n") * 100)
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("exceeds", resp.json()["error"])
+
+    def test_archives_are_refused(self):
+        resp = self._preview(b"PK\x03\x04 not really a log\n")
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("archive", resp.json()["error"])
+
+    def test_unknown_profile_and_reserved_case_are_400(self):
+        self.assertEqual(self._preview(query="?profile=bogus").status_code, 400)
+        os.makedirs(Path(self.log_root) / "uploaded-logs")
+        self.assertEqual(self._preview(query="?case=uploaded-logs").status_code, 400)
+
+    def test_build_profile_applies(self):
+        text = self._preview("fetch http://deb.debian.org/debian once\n",
+                             query="?profile=build").json()
+        self.assertIn("deb.debian.org", text["text"])
+        self.assertEqual(text["profile"], "build")
+
+    def test_not_configured_state_dir_shows_a_409(self):
+        with override_settings(REDACT_STATE_DIR=""):
+            self.assertEqual(self._preview().status_code, 409)

@@ -7,6 +7,9 @@ one thing a log-redaction feature must never do):
 - POST /redact/upload/  — JS path. Raw body, Content-Type: application/
   octet-stream, filename in X-Filename. Django never parses this as a form,
   so request.POST stays empty and the body stream is read directly here.
+- POST /redact/preview/ — raw body like upload, but the redacted text comes
+  back as JSON and nothing is written under LOG_ANALYSIS_ROOT (the log-uploader
+  app's "redact & copy").
 - POST /redact/paste/   — JS-off fallback. An ordinary urlencoded POST (a
   <textarea>), bounded by DATA_UPLOAD_MAX_MEMORY_SIZE (16 MB, already raised
   for the screenshot-upload path) rather than the multipart temp-file path.
@@ -16,6 +19,7 @@ from __future__ import annotations
 
 import itertools
 import os
+from collections import Counter
 
 from django.conf import settings
 from django.core.exceptions import SuspiciousFileOperation
@@ -197,6 +201,69 @@ def _write_stats(stats_path, stats, leak_hits, line_count, logfilter=None, profi
     stats_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+class _Run:
+    """One redaction pass over a stream: the redactor, the logcat filter and the
+    leak check, shared by the upload paths (which write the lines to a case) and
+    the preview (which returns them). `lines()` is a generator; `line_count` and
+    `leak_hits` are complete once it is exhausted."""
+
+    def __init__(self, redactor, logfilter, hosts, profile, source):
+        self.redactor = redactor
+        self.logfilter = logfilter
+        self.hosts = hosts
+        self.profile = profile
+        self._source = source
+        self.line_count = 0
+        self.leak_hits = Counter()
+
+    def lines(self):
+        # Subtraction before scrubbing: an Android logcat export is the whole
+        # device's log, and the redactor's rules were written for daemon and
+        # server logs. The filter drops every other process's lines before they
+        # can be written; it is the identity function for anything that is not
+        # logcat.
+        for scrubbed in redact_stream(self.logfilter.run(self._source), self.redactor):
+            self.line_count += 1
+            self.leak_hits.update(leak_check(scrubbed, self.hosts))
+            yield scrubbed
+
+
+def _profile_error(profile):
+    if profile not in ("auto", *PROFILES):
+        return {"error": f"unknown profile {profile!r}"}
+    return None
+
+
+def _start_run(read, case_name, hosts, salt, profile):
+    """Peek at the start of the stream for `auto`, then build the redactor. The
+    peeked lines are chained back in front, so nothing is read twice and nothing
+    touches disk. Raises ArchiveRejected / UploadTooLarge."""
+    stream = _stream_lines_from(read)
+    head = list(itertools.islice(stream, _PROFILE_PEEK_LINES))
+    profile = _resolve_profile(profile, case_name, head)
+    redactor = Redactor(salt=salt, hosts=hosts, profile=profile)
+    return _Run(
+        redactor, logcat.LogcatFilter(redactor), hosts, profile,
+        itertools.chain(head, stream),
+    )
+
+
+_ARCHIVE_ERROR = {"error": "archive files are not accepted — upload the extracted log text"}
+
+
+def _too_large_error():
+    return {"error": f"upload exceeds the {MAX_UPLOAD_BYTES // (1024 * 1024)} MB cap"}
+
+
+def _filter_warning(logfilter):
+    if logfilter.detected and logfilter.kept_body == 0:
+        return (
+            "no log lines survived the process filter — the export contains no "
+            "recognised process; nothing to analyse"
+        )
+    return ""
+
+
 def _do_redact(request, case_name, filename, hosts, read, profile="auto"):
     # case_name arrives already resolved (see paths.resolve_case_name). This check
     # is the last line of defence rather than the user-facing validation: nothing
@@ -207,55 +274,41 @@ def _do_redact(request, case_name, filename, hosts, read, profile="auto"):
     if paths.is_reserved(case_name):
         return None, {"error": f"{case_name!r} is reserved, not a case"}, 400
 
+    if (error := _profile_error(profile)):
+        return None, error, 400
     # Union, never replace: an upload whose names box was empty must not quietly
     # drop what the case already knows and scrub less than the last one did.
-    if profile not in ("auto", *PROFILES):
-        return None, {"error": f"unknown profile {profile!r}"}, 400
     hosts = state.merge_hosts(case_name, hosts)
     salt = state.load_or_create_salt(case_name)
 
-    # Peek at the start of the stream for `auto`; the peeked lines are chained
-    # back in front, so nothing is read twice and nothing touches disk.
-    stream = _stream_lines_from(read)
     try:
-        head = list(itertools.islice(stream, _PROFILE_PEEK_LINES))
+        run = _start_run(read, case_name, hosts, salt, profile)
     except ArchiveRejected:
-        return None, {"error": "archive files are not accepted — upload the extracted log text"}, 400
+        return None, _ARCHIVE_ERROR, 400
     except UploadTooLarge:
-        return None, {"error": f"upload exceeds the {MAX_UPLOAD_BYTES // (1024 * 1024)} MB cap"}, 400
-    profile = _resolve_profile(profile, case_name, head)
-    redactor = Redactor(salt=salt, hosts=hosts, profile=profile)
+        return None, _too_large_error(), 400
+    redactor, logfilter, profile = run.redactor, run.logfilter, run.profile
 
     try:
         dest = paths.destination_path(case_name, filename, create_case=True)
     except SuspiciousFileOperation as exc:
         return None, {"error": str(exc)}, 400
 
-    line_count = 0
     preview: list[str] = []
-    leak_hits = None
-    # Subtraction before scrubbing: an Android logcat export is the whole device's
-    # log, and the redactor's rules were written for daemon and server logs. The
-    # filter drops every other process's lines before they can be written; it is
-    # the identity function for anything that is not logcat.
-    logfilter = logcat.LogcatFilter(redactor)
     try:
         with open(dest, "w", encoding="utf-8", newline="") as out:
             os.chmod(dest, 0o644)
-            leak_hits = _empty_counter()
-            lines = logfilter.run(itertools.chain(head, stream))
-            for scrubbed in redact_stream(lines, redactor):
+            for scrubbed in run.lines():
                 out.write(scrubbed)
-                line_count += 1
                 if len(preview) < _PREVIEW_LINES:
                     preview.append(scrubbed.rstrip("\n"))
-                leak_hits.update(leak_check(scrubbed, hosts))
     except ArchiveRejected:
         dest.unlink(missing_ok=True)
-        return None, {"error": "archive files are not accepted — upload the extracted log text"}, 400
+        return None, _ARCHIVE_ERROR, 400
     except UploadTooLarge:
         dest.unlink(missing_ok=True)
-        return None, {"error": f"upload exceeds the {MAX_UPLOAD_BYTES // (1024 * 1024)} MB cap"}, 400
+        return None, _too_large_error(), 400
+    line_count, leak_hits = run.line_count, run.leak_hits
 
     stats_path = dest.with_name(dest.name + ".redaction-stats")
     _write_stats(stats_path, redactor.stats, leak_hits, line_count, logfilter, profile)
@@ -271,20 +324,9 @@ def _do_redact(request, case_name, filename, hosts, read, profile="auto"):
         "preview": preview,
         "format": "android-logcat" if logfilter.detected else "",
         "dropped": logfilter.dropped if logfilter.detected else 0,
-        "warning": (
-            "no log lines survived the process filter — the export contains no "
-            "recognised process; nothing to analyse"
-            if logfilter.detected and logfilter.kept_body == 0
-            else ""
-        ),
+        "warning": _filter_warning(logfilter),
     }
     return dest, result, 200
-
-
-def _empty_counter():
-    from collections import Counter
-
-    return Counter()
 
 
 @require_POST
@@ -319,6 +361,50 @@ def upload(request):
         return JsonResponse(result, status=status)
 
     return render(request, "redact/_result.html", {"result": result}, status=200)
+
+
+@require_POST
+def preview(request):
+    """Redact the raw request body and return it as JSON, saving nothing.
+
+    `?case=` borrows that case's salt and names (read-only: no case folder is
+    created, and the names box is not merged), so placeholders match its logs.
+    Without it a fixed state key `_preview` supplies a persistent salt.
+    `?profile=` as for upload. Same size cap and archive refusal as upload."""
+    try:
+        raw_case = request.GET.get("case", "").strip()
+        if raw_case:
+            case_name = paths.resolve_case_name(raw_case)
+            state_key = case_name
+        else:
+            case_name, state_key = "", state.PREVIEW_KEY
+        profile = request.GET.get("profile", "auto") or "auto"
+        if (error := _profile_error(profile)):
+            return JsonResponse(error, status=400)
+        hosts = state.load_hosts(state_key)
+        salt = state.load_or_create_salt(state_key)
+    except paths.ReservedCaseName as exc:
+        return JsonResponse({"error": str(exc)}, status=400)
+    except paths.NotConfigured as exc:
+        return _not_configured(request, exc)
+
+    try:
+        run = _start_run(request.read, case_name, hosts, salt, profile)
+        text = "".join(run.lines())
+    except ArchiveRejected:
+        return JsonResponse(_ARCHIVE_ERROR, status=400)
+    except UploadTooLarge:
+        return JsonResponse(_too_large_error(), status=400)
+
+    return JsonResponse({
+        "text": text,
+        "profile": run.profile,
+        "stats": dict(run.redactor.stats),
+        "leak_hits": dict(run.leak_hits),
+        "line_count": run.line_count,
+        "format": "android-logcat" if run.logfilter.detected else "",
+        "warning": _filter_warning(run.logfilter),
+    })
 
 
 @require_POST
