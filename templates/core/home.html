@@ -9,7 +9,7 @@
   keystroke, and an open edit form under a hidden card survives the filter.
 {% endcomment %}
 <form class="project-filter" method="get" action="{% url 'core:home' %}" role="search">
-  <input type="search" name="q" value="{{ q }}" placeholder="Filter by title or project…"
+  <input type="search" name="q" value="{{ q }}" placeholder="Filter by #id, title or project…"
          autocomplete="off" aria-label="Filter ideas">
   {% if show_closed %}<input type="hidden" name="closed" value="1">{% endif %}
   <button type="submit">Filter</button>
@@ -29,7 +29,7 @@
   {% if not any_ideas %}
   <p class="empty">No {% if not show_closed %}open {% endif %}ideas. Add one on a <a href="{% url 'core:projects' %}">project's page</a>.</p>
   {% else %}
-  <p class="empty no-match-message"{% if any_match %} hidden{% endif %}>No ideas match “<span class="no-match-query">{{ q }}</span>”.</p>
+  <p class="empty no-match-message"{% if any_match %} hidden{% endif %}>No ideas match “<span class="no-match-query">{{ q }}</span>”. {% include "core/_no_match_open.html" %}</p>
   {% endif %}
   {% comment %}
     Every section is rendered, empty or not, so a card that arrives later (the

@@ -1,0 +1,2 @@
+{# "Open idea #N" for an id query with no card on the page (#307); idea-filter.js keeps it in sync. #}
+<a class="no-match-open" href="{{ q_id_url }}"{% if not q_id %} hidden{% endif %} data-href-template="{{ idea_detail_url_template }}">Open idea #<span class="no-match-open-id">{{ q_id }}</span></a>

@@ -166,6 +166,12 @@ class ProjectDetailPageTests(TestCase):
         self.assertIn('name="closed" value="1"', html)
         self.assertIn("closed=1&amp;q=zzz", self.page("?q=zzz").content.decode())
 
+    def test_search_for_an_id_not_listed_offers_to_open_it(self):
+        html = self.page(f"?q=%23{self.closed.pk}").content.decode()
+        self.assertIn('class="empty no-match-message">', html)
+        self.assertIn(f'<a class="no-match-open" href="/ideas/{self.closed.pk}/"', html)
+        self.assertIn(f'Open idea #<span class="no-match-open-id">{self.closed.pk}</span>', html)
+
     def test_search_box_hidden_without_ideas(self):
         Idea.objects.filter(project=self.project).delete()
         self.assertNotIn('name="q"', self.page().content.decode())
@@ -373,6 +379,27 @@ class IdeasViewTests(TestCase):
         html = self.page(q="beta-tool")
         self.assertIn("hidden", self.card_tag(html, self.new))
         self.assertIn('class="empty no-match-message" hidden', html)
+
+    def test_js_off_filter_matches_an_id_exactly(self):
+        self.planned.goal = f"see {self.new.pk}"
+        self.planned.save()
+        Idea.objects.filter(pk=self.verify.pk).update(title=f"Check {self.new.pk} again")
+        for query in (str(self.new.pk), f"#{self.new.pk}"):
+            html = self.page(q=query)
+            self.assertNotIn("hidden", self.card_tag(html, self.new), query)
+            self.assertIn("hidden", self.card_tag(html, self.planned), query)
+            self.assertIn("hidden", self.card_tag(html, self.verify), query)
+        self.assertIn(f'data-filter-id="{self.new.pk}"', self.page())
+
+    def test_filter_for_a_closed_id_offers_to_open_it(self):
+        html = self.page(q=str(self.done.pk))
+        self.assertIn('<p class="empty no-match-message">', html)
+        self.assertIn(f'<a class="no-match-open" href="/ideas/{self.done.pk}/"', html)
+
+    def test_text_filter_keeps_the_open_link_hidden(self):
+        html = self.page(q="zzz")
+        self.assertIn('class="no-match-open" href="" hidden', html)
+        self.assertIn('data-href-template="/ideas/__PK__/"', html)
 
     def test_filter_hides_a_section_without_matches(self):
         html = self.page(q="Planned work")

@@ -129,19 +129,40 @@ def _render_project_card(request, project, page):
     return render(request, "core/_project_row.html", context)
 
 
-def _idea_matches(idea, query):
-    """Whether a project page's search box shows `idea`; static/js/idea-filter.js applies
-    the same rule. Digits (optionally `#`-prefixed) match that idea's id exactly."""
+def _query_id(query):
+    """The idea id a filter query names (`147` or `#147`), else None."""
+    return query.lstrip("#") if re.fullmatch(r"#?\d+", query) else None
+
+
+def _idea_matches(idea, query, text):
+    """Whether a filter box shows `idea`; static/js/idea-filter.js applies the same rule.
+    Digits (optionally `#`-prefixed) match that idea's id exactly (#307), anything else
+    is a case-insensitive substring of `text` (the card's data-filter)."""
     if not query:
         return True
-    if re.fullmatch(r"#?\d+", query):
-        return query.lstrip("#") == str(idea.pk)
-    return query.lower() in f"#{idea.pk} {idea.title} {idea.goal}".lower()
+    query_id = _query_id(query)
+    if query_id is not None:
+        return query_id == str(idea.pk)
+    return query.lower() in text.lower()
+
+
+def _no_match_context(query):
+    """The "Open idea #N" link in a no-match message: shown when the query is an id
+    that isn't on the page (closed, or another project's). idea-filter.js fills it
+    from `data-href-template` while typing."""
+    query_id = _query_id(query)
+    template = reverse("core:idea_detail", args=[_PLACEHOLDER_PK]).replace(str(_PLACEHOLDER_PK), "__PK__")
+    return {
+        "q_id": query_id,
+        "q_id_url": template.replace("__PK__", query_id) if query_id else "",
+        "idea_detail_url_template": template,
+    }
 
 
 def _render_project_ideas(request, project, page):
     """A project page's idea list with a fresh add slot, after an idea was added."""
-    context = {"project": project, "ideas": _project_ideas(project, page), "lazy": True, **page.context()}
+    context = {"project": project, "ideas": _project_ideas(project, page), "lazy": True,
+               **_no_match_context(""), **page.context()}
     return render(request, "core/_project_ideas.html", context)
 
 
@@ -259,11 +280,8 @@ def home(request):
     query = request.GET.get("q", "").strip()
     statuses = _idea_board_statuses(page)
     ideas = _idea_board(page)
-    query_lower = query.lower()
     for idea in ideas:
-        idea.matches = not query or any(
-            query_lower in text.lower() for text in (idea.title, idea.project.name, idea.project.folder)
-        )
+        idea.matches = _idea_matches(idea, query, f"#{idea.pk} {idea.title} {idea.project.name} {idea.project.folder}")
     sections = []
     for status in statuses:
         members = [idea for idea in ideas if idea.status == status]
@@ -277,6 +295,7 @@ def home(request):
         "page_title": "Ideas",
         "sections": sections,
         "q": query,
+        **_no_match_context(query),
         "any_ideas": bool(ideas),
         "any_match": any(idea.matches for idea in ideas),
         "lazy": True,
@@ -355,12 +374,13 @@ def project_detail(request, ref):
     query = request.GET.get("q", "").strip()
     ideas = _project_ideas(project, page)
     for idea in ideas:
-        idea.matches = _idea_matches(idea, query)
+        idea.matches = _idea_matches(idea, query, f"#{idea.pk} {idea.title} {idea.goal}")
     project.visible_ideas = ideas
     context = {
         "project": project,
         "ideas": ideas,
         "q": query,
+        **_no_match_context(query),
         "no_match": bool(ideas) and not any(idea.matches for idea in ideas),
         "page_title": project.name,
         "lazy": True,

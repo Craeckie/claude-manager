@@ -3,9 +3,9 @@
 // never removed, so an open edit form survives a query it no longer matches.
 //
 // Each card's data-filter is the text to match. A card that also carries
-// data-filter-id (project page) is matched by exact id when the query is only
-// digits, optionally with a leading "#" -- "147" must not match every goal that
-// contains 147. core/views.py:_idea_matches applies the same rule for JS-off.
+// data-filter-id (every card on the Ideas page and a project page) is matched by
+// exact id when the query is only digits, optionally with a leading "#" -- "147"
+// must not match every goal that contains 147. core/views.py:_idea_matches applies the same rule for JS-off.
 (function () {
   var input = document.querySelector('.project-filter input[name=q]');
   if (!input) {
@@ -69,6 +69,16 @@
     if (noMatch) {
       noMatch.hidden = anyVisible || !document.querySelector('li.idea[id^="idea-"]');
       noMatch.querySelector('.no-match-query').textContent = raw;
+      // An id that isn't on the page (closed, another project's) can still be
+      // opened directly (#307).
+      var open = noMatch.querySelector('.no-match-open');
+      if (open) {
+        var isId = /^#?\d+$/.test(raw);
+        var id = raw.replace('#', '');
+        open.hidden = !isId;
+        open.setAttribute('href', isId ? open.dataset.hrefTemplate.replace('__PK__', id) : '');
+        open.querySelector('.no-match-open-id').textContent = isId ? id : '';
+      }
     }
     // Links that reload the page keep the query.
     document.querySelectorAll('.closed-toggle').forEach(function (link) {
