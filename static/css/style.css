@@ -1936,3 +1936,68 @@ li.ideas-empty {
     font-size: 0.9em;
     opacity: 0.85;
 }
+
+/* Field history page (#704). */
+.history-title {
+    margin: 0.5rem 0 0.25rem;
+    font-size: 1.3rem;
+}
+
+.history-subtitle,
+.history-meta {
+    font-weight: normal;
+    opacity: 0.7;
+}
+
+.history-subtitle {
+    font-size: 1rem;
+}
+
+.history-intro {
+    margin: 0 0 1rem;
+    opacity: 0.8;
+    font-size: 0.9rem;
+}
+
+.history-list {
+    list-style: none;
+    margin: 0.75rem 0 0;
+    padding: 0;
+}
+
+.history-entry {
+    border: 1px solid rgba(127, 127, 127, 0.4);
+    border-radius: 6px;
+    margin-bottom: 0.5rem;
+}
+
+.history-entry summary {
+    padding: 0.5rem 0.75rem;
+    cursor: pointer;
+}
+
+.history-meta {
+    font-size: 0.85rem;
+    margin-left: 0.5rem;
+}
+
+.history-value {
+    margin: 0;
+    padding: 0 0.75rem 0.5rem;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    max-height: 30rem;
+    overflow: auto;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 0.85rem;
+}
+
+.history-entry form {
+    padding: 0 0.75rem 0.75rem;
+}
+
+.history-restored {
+    padding: 0.5rem 0.75rem;
+    border: 1px solid var(--color-accent);
+    border-radius: 6px;
+}

@@ -111,7 +111,7 @@ def _ack(record, keys, **extra):
 def _update_idea(arguments):
     data = {k: v for k, v in arguments.items() if k != "idea_id"}
     record = services.update_idea(arguments["idea_id"], data)
-    return _ack(record, IDEA_ACK_KEYS, updated=sorted(data))
+    return _ack(record, (*IDEA_ACK_KEYS, "updated", "previous_lengths"))
 
 
 TOOLS = [
@@ -259,7 +259,10 @@ TOOLS = [
             + REVIEW_INSTRUCTION
             + " Pass include_prompt=true to also get `prompt`, the same content "
             "rendered as one Markdown prompt (it repeats every section, so it roughly "
-            "doubles the response). Once the work is done, first move any lesson that "
+            "doubles the response). fields=[...] returns only those keys (plus id, "
+            "status, updated_at, allowed_transitions); history=<field> adds that field's "
+            "last old values, newest first, to undo an overwrite by writing one back "
+            "with update_idea. Once the work is done, first move any lesson that "
             "will matter again (a root cause, a trap, a how-to) into the project's "
             "docs/ -- the report is never fed back into a later prompt -- and add a "
             "line to the project's CLAUDE.md only for a new rule or a pointer to that "
@@ -281,11 +284,24 @@ TOOLS = [
                     "type": "boolean",
                     "description": "Also return the rendered prompt (repeats every section).",
                 },
+                "fields": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Return only these keys of the record (e.g. [\"report\"]).",
+                },
+                "history": {
+                    "type": "string",
+                    "enum": schemas.REVISION_FIELD_VALUES,
+                    "description": "Also return this field's kept old values as `history`.",
+                },
             },
             ["idea_id"],
         ),
         "handler": lambda a: services.get_idea(
-            a["idea_id"], include_prompt=a.get("include_prompt", False)
+            a["idea_id"],
+            include_prompt=a.get("include_prompt", False),
+            fields=a.get("fields"),
+            history=a.get("history"),
         ),
     },
     {
@@ -334,7 +350,13 @@ TOOLS = [
         "description": (
             "Edit an idea's title, type (kind), priority (low, medium or high), any of its five prompt sections "
             "(goal, context, notes, plan, review), its report, or its commits. "
-            "Omitted fields are left unchanged. Use plan to store a step-by-step "
+            "Omitted fields are left unchanged; a given field REPLACES the stored value "
+            "whole. To add to a text field without re-sending it -- a progress line, an "
+            "open question, a decision -- use append={field: text} or prepend={field: "
+            "text} (newest-first logs), and commits_add for hashes. When you do replace "
+            "a non-empty field, pass if_unmodified_since=<updated_at from your get_idea "
+            "read> so a change someone made since is not lost. Every overwritten value "
+            "is kept: get_idea(history=<field>) shows the old ones. Use plan to store a step-by-step "
             "implementation plan for the idea without implementing it yet. kind is "
             "one of fix, feature, design, question or other; a non-other kind "
             "becomes a leading \"### Type\" section of the generated prompt, while "
@@ -353,13 +375,14 @@ TOOLS = [
             "create_idea when the finding has no corresponding idea at all. Status "
             "is not writable here -- use transition_idea. commits is the list of "
             "hashes that implemented this idea, normally set once, after the work "
-            "is committed -- it replaces the full list rather than appending to it. "
+            "is committed -- it replaces the full list; commits_add adds to it. "
             "project moves the idea to another project (given as its id or folder "
             "name), keeping its id, status, sections, plan, report, review, commits "
             "and screenshots -- use it instead of re-creating the idea under the "
             "other project and abandoning the original. Answers with id, status, "
-            "allowed_transitions and `updated` (the names of the fields written), "
-            "not the record -- call get_idea to read it back."
+            "allowed_transitions, `updated` (the names of the fields written) and "
+            "`previous_lengths` (each written field's length before), not the record "
+            "-- call get_idea to read it back."
         ),
         "inputSchema": _object_schema(
             {
@@ -376,6 +399,7 @@ TOOLS = [
                 "review": _idea_fields["review"],
                 "commits": _idea_fields["commits"],
                 "needs_verification": _idea_fields["needs_verification"],
+                **schemas.IDEA_UPDATE_OPTION_SCHEMAS,
             },
             ["idea_id"],
         ),

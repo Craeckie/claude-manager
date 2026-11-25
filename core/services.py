@@ -8,6 +8,7 @@ surfaces in both places.
 import mimetypes
 import os
 import subprocess
+from datetime import datetime, timezone as dt_timezone
 from pathlib import Path
 
 from django.core.files.base import ContentFile
@@ -16,11 +17,14 @@ from django.utils import timezone
 
 from .forms import IdeaEditForm, IdeaForm, ProjectForm
 from .models import (
+    APPENDABLE_FIELDS,
     Artifact,
     ARTIFACT_EXTENSIONS,
+    FieldRevision,
     Idea,
     OPEN_IDEA_STATUSES,
     Project,
+    REVISION_FIELDS,
     Screenshot,
     SCREENSHOT_EXTENSIONS,
 )
@@ -349,8 +353,47 @@ def list_ideas(
     return [to_dict(i) for i in qs]
 
 
-def get_idea(idea_id, include_prompt=True):
-    return idea_to_dict(_get_idea(idea_id), include_prompt=include_prompt)
+# What get_idea(fields=[...]) always keeps, whatever was asked for.
+IDEA_IDENTITY_KEYS = ("id", "status", "updated_at", "allowed_transitions")
+
+
+def _check_revision_field(field):
+    if field not in REVISION_FIELDS:
+        raise Invalid(f"no history for {field!r}; fields with history: {', '.join(REVISION_FIELDS)}")
+
+
+def revision_to_dict(revision):
+    return {
+        "id": revision.pk,
+        "old_value": revision.value,
+        "created_at": revision.created_at.isoformat(),
+        "source": revision.source,
+    }
+
+
+def field_history(idea_id, field):
+    """The kept old values of one field, newest first (#704)."""
+    _check_revision_field(field)
+    _get_idea(idea_id)
+    revisions = FieldRevision.objects.filter(idea_id=idea_id, field=field)
+    return [revision_to_dict(r) for r in revisions]
+
+
+def get_idea(idea_id, include_prompt=True, fields=None, history=None):
+    """One idea as a dict. `fields` keeps only those keys (plus IDEA_IDENTITY_KEYS);
+    `history` adds that field's old values under "history"."""
+    data = idea_to_dict(_get_idea(idea_id), include_prompt=include_prompt)
+    if fields is not None:
+        if not isinstance(fields, list) or not all(isinstance(f, str) for f in fields):
+            raise Invalid("fields must be a list of field names")
+        unknown = sorted(set(fields) - set(data))
+        if unknown:
+            raise Invalid(f"unknown field(s): {', '.join(unknown)}")
+        keep = (*IDEA_IDENTITY_KEYS, *fields)
+        data = {k: v for k, v in data.items() if k in keep}
+    if history is not None:
+        data["history"] = field_history(idea_id, history)
+    return data
 
 
 def create_idea(project_ref, data):
@@ -362,16 +405,135 @@ def create_idea(project_ref, data):
     return idea_to_dict(idea)
 
 
+# update_idea keys that are not fields but say how to write them.
+UPDATE_OPTIONS = ("append", "prepend", "commits_add", "if_unmodified_since")
+
+
+def _join(first, second):
+    """`first` and `second` separated by one blank line, `first` kept byte for byte."""
+    if first.endswith("\n\n"):
+        sep = ""
+    elif first.endswith("\n"):
+        sep = "\n"
+    else:
+        sep = "\n\n"
+    return first + sep + second
+
+
+def _text_additions(option, value, data):
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise Invalid(f"{option} must be an object of {{field: text}}")
+    unknown = sorted(set(value) - set(APPENDABLE_FIELDS))
+    if unknown:
+        raise Invalid(
+            f"{option} cannot take {', '.join(unknown)}; it takes {', '.join(APPENDABLE_FIELDS)}"
+        )
+    for field, text in value.items():
+        if not isinstance(text, str):
+            raise Invalid(f"{option}.{field} must be a string")
+        if field in data:
+            raise Invalid(f"{field} is both replaced and given in {option}; pick one")
+    return value
+
+
+def _added_commits(idea, value, data):
+    if value is None:
+        return None
+    if not isinstance(value, list) or not all(isinstance(c, str) for c in value):
+        raise Invalid("commits_add must be a list of commit hashes")
+    if "commits" in data:
+        raise Invalid("commits and commits_add cannot be combined; pick one")
+    commits = list(idea.commits)
+    for commit in value:
+        if not any(_commit_matches(known, commit) for known in commits):
+            commits.append(commit)
+    return commits
+
+
+def _parse_since(value):
+    try:
+        since = datetime.fromisoformat(value)
+    except (TypeError, ValueError):
+        raise Invalid(
+            f"if_unmodified_since {value!r} is not an ISO timestamp; pass updated_at from get_idea"
+        )
+    return since if since.tzinfo else since.replace(tzinfo=dt_timezone.utc)
+
+
+def _check_not_stale(idea, replaced, since):
+    """Refuse when a replaced field was changed by anyone after `since` (a read's updated_at)."""
+    newer = (
+        FieldRevision.objects.filter(idea_id=idea.pk, field__in=replaced, created_at__gt=since)
+        .order_by("field", "-created_at")
+    )
+    latest = {}
+    for revision in newer:
+        latest.setdefault(revision.field, revision)
+    if latest:
+        changes = "; ".join(
+            f"{field} by {rev.source or 'an unattributed write'} at {rev.created_at.isoformat()}"
+            for field, rev in sorted(latest.items())
+        )
+        raise Invalid(
+            f"changed since {since.isoformat()}: {changes}. Nothing was written; "
+            "re-read the idea with get_idea and redo the change on the current text."
+        )
+
+
 def update_idea(idea_id, data):
+    """A partial update. Besides plain fields (each *replaces* the stored value), `data`
+    may carry UPDATE_OPTIONS: `append`/`prepend` ({field: text}, joined with a blank
+    line), `commits_add` (hashes not yet listed) and `if_unmodified_since` (refuse a
+    replacement of a field someone changed after that updated_at).
+
+    The result is the full record plus `updated` (field names written) and
+    `previous_lengths` ({field: length before} for text fields and commits).
+    """
     _reject_status_write(data, "transition_idea")
+    options = {k: data[k] for k in UPDATE_OPTIONS if k in data}
+    data = {k: v for k, v in data.items() if k not in UPDATE_OPTIONS}
     _reject_unknown_keys(data, IdeaEditForm.Meta.fields)
+    append = _text_additions("append", options.get("append"), data)
+    prepend = _text_additions("prepend", options.get("prepend"), data)
     idea = _get_idea(idea_id)
-    if "project" in data:
+    if "if_unmodified_since" in options:
+        since = _parse_since(options["if_unmodified_since"])
+        _check_not_stale(idea, [f for f in data if f in REVISION_FIELDS], since)
+    commits = _added_commits(idea, options.get("commits_add"), data)
+
+    written = dict(data)
+    for field in {*append, *prepend}:
+        text = getattr(idea, field)
+        if field in prepend:
+            text = _join(prepend[field], text) if text.strip() else prepend[field]
+        if field in append:
+            text = _join(text, append[field]) if text.strip() else append[field]
+        written[field] = text
+    if commits is not None:
+        written["commits"] = commits
+    previous_lengths = {
+        f: len(getattr(idea, f)) for f in sorted(written) if isinstance(getattr(idea, f), (str, list))
+    }
+
+    if "project" in written:
         # A move. The reference is resolved like every other project argument (id or
         # folder), so the form only ever sees a pk and an unknown target is a NotFound
         # rather than a form error naming a choice list.
-        data = {**data, "project": _resolve_project(data["project"]).pk}
-    idea = _apply_partial(idea, IdeaEditForm, IdeaEditForm.Meta.fields, data)
+        written["project"] = _resolve_project(written["project"]).pk
+    idea = _apply_partial(idea, IdeaEditForm, IdeaEditForm.Meta.fields, written)
+    return {**idea_to_dict(idea), "updated": sorted(written), "previous_lengths": previous_lengths}
+
+
+def restore_field(idea_id, revision_id):
+    """Write a kept old value back. An ordinary write, so it is revisioned itself."""
+    try:
+        revision = FieldRevision.objects.get(pk=revision_id, idea_id=idea_id)
+    except FieldRevision.DoesNotExist:
+        raise NotFound(f"no revision {revision_id!r} on idea {idea_id!r}")
+    idea = _get_idea(idea_id)
+    idea = _apply_partial(idea, IdeaEditForm, IdeaEditForm.Meta.fields, {revision.field: revision.value})
     return idea_to_dict(idea)
 
 

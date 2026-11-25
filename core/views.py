@@ -22,8 +22,11 @@ from .models import (
     OPEN_IDEA_STATUSES,
     Artifact,
     Event,
+    FieldRevision,
     Idea,
     Project,
+    REVISION_FIELDS,
+    REVISION_KEEP,
     Screenshot,
 )
 from .security import harden_media_response, is_markdown_name, markdown_page_response
@@ -321,6 +324,72 @@ def idea_detail(request, pk):
         **page.context(),
     }
     return render(request, "core/idea_detail.html", context)
+
+
+def _history_context(idea, field, restored=None):
+    """The history list (#704): kept old values, grouped by field, newest first."""
+    revisions = FieldRevision.objects.filter(idea_id=idea.pk)
+    counts = {}
+    for name in revisions.values_list("field", flat=True):
+        counts[name] = counts.get(name, 0) + 1
+    if field:
+        revisions = revisions.filter(field=field)
+    entries = []
+    for revision in revisions:
+        value = revision.value
+        entries.append(
+            {
+                "revision": revision,
+                "text": json.dumps(value, indent=1) if isinstance(value, list) else value,
+                "size": len(value),
+                "unit": "hashes" if isinstance(value, list) else "chars",
+                "when": revision.created_at,
+                "source_label": Event.Source(revision.source).label if revision.source else "No request",
+                "is_current": value == getattr(idea, revision.field),
+            }
+        )
+    return {
+        "idea": idea,
+        "field": field,
+        "field_counts": [(name, counts[name]) for name in REVISION_FIELDS if name in counts],
+        "entries": entries,
+        "restored": restored,
+        "display_time_zone": activity.display_zone(),
+    }
+
+
+def _history_field(request, source):
+    field = source.get("field", "")
+    if field and field not in REVISION_FIELDS:
+        raise Http404("no history for that field")
+    return field
+
+
+@require_http_methods(["GET"])
+def idea_history(request, pk):
+    """An idea's kept old field values, each with a Restore button (#704)."""
+    idea = get_object_or_404(Idea.objects.select_related("project"), pk=pk)
+    context = {
+        "project": idea.project,
+        "page_title": f"#{idea.pk} history",
+        "keep": REVISION_KEEP,
+        **_history_context(idea, _history_field(request, request.GET)),
+    }
+    return render(request, "core/idea_history.html", context)
+
+
+@require_POST
+def idea_history_restore(request, pk, revision_pk):
+    idea = get_object_or_404(Idea, pk=pk)
+    revision = get_object_or_404(FieldRevision, pk=revision_pk, idea_id=idea.pk)
+    field = _history_field(request, request.POST)
+    services.restore_field(idea.pk, revision.pk)
+    if _is_htmx(request):
+        idea.refresh_from_db()
+        context = _history_context(idea, field, restored={"field": revision.field, "when": revision.created_at})
+        return render(request, "core/_idea_history.html", context)
+    url = reverse("core:idea_history", args=[idea.pk])
+    return redirect(f"{url}?{urlencode({'field': field})}" if field else url)
 
 
 @require_http_methods(["GET"])

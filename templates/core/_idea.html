@@ -40,6 +40,8 @@
        hx-target="#idea-{{ idea.pk }}" hx-swap="outerHTML" class="admin-link">Edit</a>
     {% if view != "idea" %}
     <a class="admin-link idea-open-link" href="{% url 'core:idea_detail' idea.pk %}">Open</a>
+    {% elif idea.revision_count %}
+    <a class="admin-link" href="{% url 'core:idea_history' idea.pk %}">History ({{ idea.revision_count }})</a>
     {% endif %}
     <a class="admin-link" href="{% url 'admin:core_idea_change' idea.pk %}">Admin</a>
   </div>

@@ -16,6 +16,7 @@ urlpatterns = [
     path("projects/<int:pk>/ideas/", api.project_ideas, name="project_ideas"),
     path("ideas/", api.idea_list, name="idea_list"),
     path("ideas/<int:pk>/", api.idea_detail, name="idea_detail"),
+    path("ideas/<int:pk>/history/", api.idea_history, name="idea_history"),
     path("ideas/<int:pk>/transition/", api.idea_transition, name="idea_transition"),
     path("ideas/<int:pk>/screenshots/", api.idea_screenshots, name="idea_screenshots"),
     path("screenshots/<int:pk>/", api.screenshot_detail, name="screenshot_detail"),

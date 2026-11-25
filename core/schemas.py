@@ -6,7 +6,7 @@ cannot disagree. Everything here is derived from `core.models` / `core.transitio
 """
 
 from .forms import IdeaEditForm, IdeaForm, ProjectForm
-from .models import Idea, Project
+from .models import APPENDABLE_FIELDS, REVISION_FIELDS, Idea, Project
 from .transitions import IDEA_TRANSITIONS, PROJECT_TRANSITIONS
 
 PROJECT_STATUS_VALUES = list(Project.Status.values)
@@ -86,6 +86,65 @@ IDEA_FIELD_SCHEMAS = {
         "type": "boolean",
         "description": _help_text(Idea, "needs_verification") + " Defaults to false.",
     },
+}
+
+# update_idea's write options (#704), shared by the MCP tool and PATCH /api/ideas/<pk>/.
+def _text_addition(verb):
+    return {
+        "type": "object",
+        "properties": {f: {"type": "string"} for f in APPENDABLE_FIELDS},
+        "additionalProperties": False,
+        "description": (
+            f"{{field: text}} to {verb} the stored text of goal, context, notes, plan, report "
+            "or review, joined with a blank line (an empty field just takes the text). "
+            "Nothing else is re-sent or overwritten. A field cannot be both replaced and "
+            "given here in one call."
+        ),
+    }
+
+
+IDEA_UPDATE_OPTION_SCHEMAS = {
+    "append": _text_addition("add after"),
+    "prepend": _text_addition("add before (newest-first logs)"),
+    "commits_add": {
+        "type": "array",
+        "items": {"type": "string"},
+        "description": (
+            "Commit hashes to add to commits; ones already listed (also abbreviated) are "
+            "skipped. Not combinable with commits."
+        ),
+    },
+    "if_unmodified_since": {
+        "type": "string",
+        "format": "date-time",
+        "description": (
+            "updated_at from the get_idea read this write is based on. If any field this "
+            "call replaces was changed after it (by anyone), nothing is written and the "
+            "error names who changed what. Pass it whenever you replace a non-empty "
+            "field; append, prepend and commits_add never need it."
+        ),
+    },
+}
+
+REVISION_FIELD_VALUES = list(REVISION_FIELDS)
+
+REVISION_SCHEMA = {
+    "type": "object",
+    "description": "One kept old value of a field, before the write at created_at replaced it.",
+    "properties": {
+        "id": {"type": "integer"},
+        "old_value": {
+            "type": ["string", "array"],
+            "items": {"type": "string"},
+            "description": "The value before the change (a list for commits).",
+        },
+        "created_at": {"type": "string", "format": "date-time"},
+        "source": {
+            "type": ["string", "null"],
+            "description": "web, admin, api or mcp; null for a write outside a request.",
+        },
+    },
+    "required": ["id", "old_value", "created_at", "source"],
 }
 
 SCREENSHOT_SCHEMA = {

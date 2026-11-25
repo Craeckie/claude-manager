@@ -17,6 +17,12 @@ urlpatterns = [
     path("ideas/<int:pk>/card/", views.idea_card, name="idea_card"),
     path("ideas/<int:pk>/body/", views.idea_body, name="idea_body"),
     path("ideas/<int:pk>/prompt/", views.idea_prompt, name="idea_prompt"),
+    path("ideas/<int:pk>/history/", views.idea_history, name="idea_history"),
+    path(
+        "ideas/<int:pk>/history/<int:revision_pk>/restore/",
+        views.idea_history_restore,
+        name="idea_history_restore",
+    ),
     path("ideas/screenshots/<int:pk>/delete/", views.screenshot_delete, name="screenshot_delete"),
     path("ideas/<int:pk>/artifacts/upload/", views.artifact_upload, name="artifact_upload"),
     path("ideas/artifacts/<int:pk>/delete/", views.artifact_delete, name="artifact_delete"),

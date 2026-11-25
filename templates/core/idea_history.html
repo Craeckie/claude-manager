@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+
+{% block content %}
+<nav class="breadcrumb" aria-label="Breadcrumb">
+  <a href="{% url 'core:project_detail' project.folder %}">{{ project.name }}</a>
+  <span aria-hidden="true">›</span>
+  <a href="{% url 'core:idea_detail' idea.pk %}">#{{ idea.pk }}</a>
+  <span aria-hidden="true">›</span>
+  <span aria-current="page">History</span>
+</nav>
+
+<h1 class="history-title">{{ idea.title }} <span class="history-subtitle">field history</span></h1>
+<p class="history-intro">The value each field had before a change, newest first. The last {{ keep }} per field are kept. A restore is itself an ordinary change, so it can be undone here too.</p>
+
+{% include "core/_idea_history.html" %}
+{% endblock %}

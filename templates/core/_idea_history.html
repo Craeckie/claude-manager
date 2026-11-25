@@ -1,0 +1,48 @@
+{% comment %}
+An idea's kept old field values (#704), one <details> per revision with a Restore form.
+Rendered by the history page and, after an htmx restore, on its own into
+#idea-history-<pk>.
+{% endcomment %}
+{% load tz %}
+{% url 'core:idea_history' idea.pk as history_url %}
+{% timezone display_time_zone %}
+<section class="idea-history" id="idea-history-{{ idea.pk }}">
+  {% if field_counts %}
+  <nav class="activity-filters history-filters" aria-label="Field">
+    <a href="{{ history_url }}"{% if not field %} class="active" aria-current="true"{% endif %}>All</a>
+    {% for name, count in field_counts %}
+    <a href="{{ history_url }}?field={{ name }}"{% if field == name %} class="active" aria-current="true"{% endif %}>{{ name }} ({{ count }})</a>
+    {% endfor %}
+  </nav>
+  {% endif %}
+  {% if restored %}
+  <p class="history-restored" role="status">Restored {{ restored.field }} to the value it had before {{ restored.when|date:"Y-m-d H:i" }}.</p>
+  {% endif %}
+  {% if entries %}
+  <ul class="history-list">
+    {% for entry in entries %}
+    <li class="history-entry">
+      <details>
+        <summary>
+          <strong>{{ entry.revision.field }}</strong>
+          <span class="history-meta">before {{ entry.when|date:"Y-m-d H:i:s" }} · {{ entry.source_label }} · {{ entry.size }} {{ entry.unit }}{% if entry.is_current %} · same as now{% endif %}</span>
+        </summary>
+        <pre class="history-value">{{ entry.text }}</pre>
+        {% if not entry.is_current %}
+        <form method="post" action="{% url 'core:idea_history_restore' idea.pk entry.revision.pk %}"
+              hx-post="{% url 'core:idea_history_restore' idea.pk entry.revision.pk %}"
+              hx-target="#idea-history-{{ idea.pk }}" hx-swap="outerHTML">
+          {% csrf_token %}
+          <input type="hidden" name="field" value="{{ field }}">
+          <button type="submit">Restore this {{ entry.revision.field }}</button>
+        </form>
+        {% endif %}
+      </details>
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="history-empty">No old values kept{% if field %} for {{ field }}{% endif %} yet.</p>
+  {% endif %}
+</section>
+{% endtimezone %}

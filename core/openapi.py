@@ -114,12 +114,13 @@ def _idea_create_body():
 
 def _idea_update_body():
     return _write_body(
-        s.IDEA_FIELD_SCHEMAS,
-        s.IDEA_UPDATE_FIELDS,
+        {**s.IDEA_FIELD_SCHEMAS, **s.IDEA_UPDATE_OPTION_SCHEMAS},
+        (*s.IDEA_UPDATE_FIELDS, *s.IDEA_UPDATE_OPTION_SCHEMAS),
         [],
-        "Partial update -- send only the fields to change. project (an id or a folder "
-        "name) moves the idea to another project, keeping everything else. status is "
-        "not accepted; use POST .../transition/ instead.",
+        "Partial update -- send only the fields to change; a given field replaces the "
+        "stored value, while append/prepend/commits_add add to it. project (an id or a "
+        "folder name) moves the idea to another project, keeping everything else. "
+        "status is not accepted; use POST .../transition/ instead.",
     )
 
 
@@ -304,7 +305,11 @@ def _paths():
             "patch": {
                 "operationId": "update_idea",
                 "summary": "Update an idea",
-                "description": "Partial update: omitted fields keep their current value.",
+                "description": (
+                    "Partial update: omitted fields keep their current value, given ones "
+                    "are replaced. The answer is the idea plus `updated` (field names "
+                    "written) and `previous_lengths` ({field: length before})."
+                ),
                 "parameters": [_pk_param("The idea's id.")],
                 "requestBody": _idea_update_body(),
                 "responses": {
@@ -314,6 +319,31 @@ def _paths():
                     "422": _RESP_422,
                 },
             },
+        },
+        "/api/ideas/{pk}/history/": {
+            "get": {
+                "operationId": "idea_field_history",
+                "summary": "Old values of one idea field",
+                "description": (
+                    "The last old values of one field, newest first: each is the value a "
+                    "write at created_at replaced. Undo an overwrite by PATCHing one back."
+                ),
+                "parameters": [
+                    _pk_param("The idea's id."),
+                    {
+                        "name": "field",
+                        "in": "query",
+                        "required": True,
+                        "schema": {"type": "string", "enum": s.REVISION_FIELD_VALUES},
+                        "description": "The field whose history to list.",
+                    },
+                ],
+                "responses": {
+                    "200": _response("The kept old values.", {"type": "array", "items": s.REVISION_SCHEMA}),
+                    "400": _RESP_400,
+                    "404": _RESP_404,
+                },
+            }
         },
         "/api/ideas/{pk}/transition/": {
             "post": {

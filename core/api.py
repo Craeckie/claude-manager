@@ -135,6 +135,14 @@ def idea_detail(request, pk, body):
     return services.update_idea(pk, body)
 
 
+@api_view("GET")
+def idea_history(request, pk, body):
+    field = request.GET.get("field")
+    if not field:
+        raise services.Invalid("missing ?field=")
+    return services.field_history(pk, field)
+
+
 @api_view("POST")
 def idea_transition(request, pk, body):
     return services.transition_idea(pk, body.get("target"))

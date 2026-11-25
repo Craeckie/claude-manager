@@ -1,4 +1,5 @@
 import hashlib
+import json
 import re
 
 import markdown
@@ -456,6 +457,11 @@ class Idea(models.Model):
     def detail_url(self):
         return idea_detail_url(self.pk)
 
+    @cached_property
+    def revision_count(self):
+        """How many old field values are kept (#704); the idea page links them."""
+        return FieldRevision.objects.filter(idea_id=self.pk).count()
+
     def allowed_transitions(self):
         table = IDEA_TRANSITIONS if self.needs_verification else IDEA_TRANSITIONS_NO_VERIFY
         return table.get(self.status, [])
@@ -669,6 +675,43 @@ class Event(models.Model):
     @property
     def is_agent(self):
         return self.source in self.AGENT_SOURCES
+
+
+# Idea fields whose previous value is kept as a FieldRevision on every change (#704),
+# and how many old values per (idea, field) survive.
+REVISION_FIELDS = ("title", "goal", "context", "notes", "plan", "report", "review", "commits")
+REVISION_KEEP = 20
+# The text fields update_idea can add to with append/prepend instead of replacing.
+APPENDABLE_FIELDS = ("goal", "context", "notes", "plan", "report", "review")
+
+
+class FieldRevision(models.Model):
+    """The value one idea field had before a change, so an overwrite can be undone (#704).
+
+    Written by `core/activity.py`'s save signals, also for writes with no source: this is
+    a safety net, not the feed. `idea_id` is a plain int for the same reason as Event's.
+    `created_at` is the idea's `updated_at` of the write that replaced the value, which
+    is what the stale-write check in `services.update_idea` compares against.
+    """
+
+    idea_id = models.IntegerField()
+    field = models.CharField(max_length=20)
+    # Text as stored; `commits` as JSON text.
+    old_value = models.TextField(blank=True)
+    source = models.CharField(max_length=10, choices=Event.Source.choices, null=True, blank=True)
+    created_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        ordering = ("-created_at", "-pk")
+        indexes = [models.Index(fields=["idea_id", "field", "-created_at"])]
+
+    def __str__(self):
+        return f"#{self.idea_id} {self.field} @ {self.created_at:%Y-%m-%d %H:%M}"
+
+    @property
+    def value(self):
+        """The old value in the field's own type (a list for commits)."""
+        return json.loads(self.old_value) if self.field == "commits" else self.old_value
 
 
 OPEN_IDEA_STATUSES = [Idea.Status.NEW, Idea.Status.PLANNED, Idea.Status.VERIFY]

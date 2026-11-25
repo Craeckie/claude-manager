@@ -10,6 +10,7 @@ a write with no source (a management command, a test's setUp) is not recorded.
 
 import contextlib
 import contextvars
+import json
 from dataclasses import dataclass, field
 from datetime import timedelta
 from zoneinfo import ZoneInfo
@@ -18,7 +19,17 @@ from django.conf import settings
 from django.db.models.signals import post_delete, post_save, pre_save
 from django.dispatch import receiver
 
-from .models import Artifact, Event, Idea, Project, Screenshot, idea_detail_url
+from .models import (
+    REVISION_FIELDS,
+    REVISION_KEEP,
+    Artifact,
+    Event,
+    FieldRevision,
+    Idea,
+    Project,
+    Screenshot,
+    idea_detail_url,
+)
 
 _source = contextvars.ContextVar("activity_source", default=None)
 
@@ -82,15 +93,42 @@ def _tracked(instance, names):
 @receiver(pre_save, sender=Idea)
 @receiver(pre_save, sender=Project)
 def _remember_before(sender, instance, **kwargs):
-    if _source.get() is None or instance._state.adding:
+    # An idea is always snapshotted, source or not: its field revisions (#704) are a
+    # safety net for every write, management commands included. A project only for the feed.
+    if instance._state.adding or (_source.get() is None and sender is not Idea):
         return
     names = IDEA_FIELDS if sender is Idea else PROJECT_FIELDS
     old = sender._base_manager.filter(pk=instance.pk).first()
     instance._activity_before = _tracked(old, names) if old is not None else None
 
 
+def _record_revisions(instance, before):
+    """Keep the old value of every changed REVISION_FIELDS field, newest REVISION_KEEP each."""
+    changed = [name for name in REVISION_FIELDS if before[name] != getattr(instance, name)]
+    for name in changed:
+        old = before[name]
+        FieldRevision.objects.create(
+            idea_id=instance.pk,
+            field=name,
+            old_value=json.dumps(old) if name == "commits" else old,
+            source=_source.get(),
+            # The write's own timestamp, so a reader who saw this updated_at is not stale.
+            created_at=instance.updated_at,
+        )
+        stale = FieldRevision.objects.filter(idea_id=instance.pk, field=name).values_list("pk", flat=True)[
+            REVISION_KEEP:
+        ]
+        FieldRevision.objects.filter(pk__in=list(stale)).delete()
+
+
 @receiver(post_save, sender=Idea)
 def _idea_saved(sender, instance, created, **kwargs):
+    before = None if created else getattr(instance, "_activity_before", None)
+    if hasattr(instance, "_activity_before"):
+        # One snapshot per save: a second save on the same instance takes a fresh one.
+        del instance._activity_before
+    if before is not None:
+        _record_revisions(instance, before)
     if _source.get() is None:
         return
     common = {
@@ -102,7 +140,6 @@ def _idea_saved(sender, instance, created, **kwargs):
     if created:
         _record(action=Event.Action.IDEA_CREATED, to_status=instance.status, **common)
         return
-    before = getattr(instance, "_activity_before", None)
     if before is None:
         return
     after = _tracked(instance, IDEA_FIELDS)
@@ -151,6 +188,7 @@ def _project_saved(sender, instance, created, **kwargs):
 
 @receiver(post_delete, sender=Idea)
 def _idea_deleted(sender, instance, **kwargs):
+    FieldRevision.objects.filter(idea_id=instance.pk).delete()
     if _source.get() is None:
         return
     project = Project._base_manager.filter(pk=instance.project_id).values_list("name", flat=True).first()

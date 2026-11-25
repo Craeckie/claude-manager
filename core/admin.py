@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import Artifact, Event, Idea, Project, Screenshot
+from .models import Artifact, Event, FieldRevision, Idea, Project, Screenshot
 
 
 class IdeaInline(admin.TabularInline):
@@ -61,3 +61,10 @@ class EventAdmin(admin.ModelAdmin):
     list_display = ("created_at", "source", "action", "idea_id", "idea_title", "project_name", "fields")
     list_filter = ("source", "action")
     search_fields = ("idea_title", "project_name")
+
+
+@admin.register(FieldRevision)
+class FieldRevisionAdmin(admin.ModelAdmin):
+    list_display = ("created_at", "idea_id", "field", "source")
+    list_filter = ("field", "source")
+    search_fields = ("old_value",)

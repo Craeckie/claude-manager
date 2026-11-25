@@ -893,6 +893,7 @@ class CompactResponseTests(MCPTestCase):
         self.assertIn("CLAUDE.md", description)
 
     def test_update_idea_answers_with_an_ack(self):
+        old_plan, old_title = self.idea.plan, self.idea.title
         _, payload = self.tool_result(
             "update_idea", {"idea_id": self.idea.pk, "plan": "2. Step two", "title": "T2"}
         )
@@ -906,6 +907,7 @@ class CompactResponseTests(MCPTestCase):
                     {"target": "abandoned", "label": "Abandon"},
                 ],
                 "updated": ["plan", "title"],
+                "previous_lengths": {"plan": len(old_plan), "title": len(old_title)},
             },
         )
 
